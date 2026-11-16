@@ -12,8 +12,15 @@
  * effect and scope, not from pattern matching on tool names or arguments. When the
  * declared effect is absent or ambiguous, the call is consequential.
  *
- * No imports.
+ * The shell is the one exception, and it is not a pattern match on a name: the command
+ * text is the only statement of what the call will do. `read-grammar.js` reads it against a
+ * closed grammar of read verbs (§4.1.3). Anything outside that grammar is consequential, so
+ * the exception can only open a read, never a write.
+ *
+ * Imports one sibling: `read-grammar.js`, which is pure and has no imports of its own.
  */
+
+import { isReadOnlyCommand, tokeniseCommand } from "./read-grammar.js";
 
 /** The outcome of classification. */
 export const CLASS = Object.freeze({
@@ -91,6 +98,24 @@ const SAFE_SUB_ACTIONS = Object.freeze({
 });
 
 /**
+ * Shell tools carry the command text and no declared effect, so the floor reads the text.
+ * The grammar that decides whether it is a read lives in `read-grammar.js`, which can only
+ * open a read: a command outside it stays consequential.
+ */
+const SHELL_TOOLS = Object.freeze(new Set(["shell", "bash"]));
+
+/** The command text of a shell call, or an empty string. */
+function readCommand(call) {
+  const metadata = call && call.metadata;
+  if (metadata && typeof metadata === "object" && typeof metadata.command === "string") {
+    return metadata.command;
+  }
+  const resources = call && call.resources;
+  if (Array.isArray(resources) && typeof resources[0] === "string") return resources[0];
+  return "";
+}
+
+/**
  * Classify a call.
  *
  * @param {{
@@ -112,6 +137,10 @@ export function classifyCall(call) {
   }
   if (declared === "read_only") {
     return result(CLASS.SAFE, "declared_read_only", false, false);
+  }
+  // A shell command states no side effect, so the floor reads the command itself.
+  if (declared === null && SHELL_TOOLS.has(action) && isReadOnlyCommand(readCommand(call))) {
+    return result(CLASS.SAFE, "read_only_command", false, false);
   }
   if (declared === "state_changing") {
     return result(CLASS.CONSEQUENTIAL, "declared_state_changing", false, true);
@@ -272,40 +301,6 @@ function looksLikeDirectory(token) {
   if (token.startsWith("-")) return false;
   if (token === "&&" || token === "||" || token === ";" || token === "|") return false;
   return token.includes("/") || token.includes("\\") || token === ".." || token === "." || token.startsWith("~") || /^[a-z]:$/i.test(token);
-}
-
-/**
- * Split a command into tokens, and remove the quotes from each.
- *
- * A quoted string stays one token, so a path with a space survives. The quotes are shell
- * syntax, not part of the value, so they are removed: every caller wants the value.
- *
- * @param {string} command
- * @returns {readonly string[]}
- */
-export function tokeniseCommand(command) {
-  const tokens = [];
-  let current = "";
-  let quote = "";
-  for (const character of command) {
-    if (quote !== "") {
-      if (character === quote) quote = "";
-      else current += character;
-      continue;
-    }
-    if (character === '"' || character === "'") {
-      quote = character;
-      continue;
-    }
-    if (/\s/.test(character)) {
-      if (current !== "") tokens.push(current);
-      current = "";
-      continue;
-    }
-    current += character;
-  }
-  if (current !== "") tokens.push(current);
-  return tokens;
 }
 
 /**

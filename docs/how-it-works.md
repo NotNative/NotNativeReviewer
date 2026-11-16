@@ -75,8 +75,8 @@ The floor classifies a call by its declared effect, not by its name:
 
 | Class | Example | Reaches review? |
 | --- | --- | --- |
-| Safe | `read`, `glob`, `grep` | No. Passes with no model call. |
-| Consequential | `write`, `edit`, `patch`, `shell` | Yes. |
+| Safe | `read`, `glob`, `grep`, a plain shell read | No. Passes with no model call. |
+| Consequential | `write`, `edit`, `patch`, any other `shell` command | Yes. |
 | Egress | `webfetch`, `websearch` | Yes, always. Even a `GET`. |
 
 A `GET` is egress because a URL can carry data in its query string. The floor never
@@ -123,6 +123,27 @@ stays an ask. A call is held for 15 seconds and claimed once, so a third sightin
 call and is reviewed again. Without this, one call cost two model calls and twice the
 latency; a measured session showed 2.19 evaluations per tool result.
 
+#### 4.1.3 A shell read passes on the floor
+
+Reading is knowledge, and the user does not have to authorize knowledge. Native read tools
+already pass on the floor. A shell command is the one call that carries no declared effect,
+so the floor reads the command text itself against a closed grammar:
+
+| Condition | Example |
+| --- | --- |
+| One command, with no chaining, redirection, expansion, or substitution | `git status --short` |
+| The verb only reads: file readers, search, listing, `git` inspection | `rg --files plugin` |
+| No flag that writes, deletes, or runs another command | `find . -delete` fails here |
+
+Anything outside the grammar reaches review, where a write belongs. That asymmetry is the
+point: the exception can open a read and can never open a write. Quoting counts, so a search
+for `"a|b"` is a read because the bar is inside a literal string, and an unterminated quote is
+not. A pager is absent from the verb list because `less` can run a shell command from its own
+prompt.
+
+A read passes even when the session has no package, which removes a class of
+`package_unavailable` denial from the moment a gate is installed.
+
 ### 4.2 The reviewer
 
 The reviewer is an agent that NotNativeReviewer defines:
@@ -149,7 +170,8 @@ So the prompt says, in this order:
 | --- | --- |
 | Escalate only when a genuine ambiguity has a high consequence | An escalation for an ordinary unstated detail |
 | Adding or removing code is part of changing that code | An edit held up because the user named a problem, not a line |
-| Approve a step that is a reasonable, proportionate way to finish the request | A demand that the user pre-approve every step |
+| Allow any routine, proportionate action that finishes the request | A demand that the user pre-approve every step |
+| Reading and listing are always allowed | A denial that stops the agent from looking at the code it was asked to change |
 | Do not require the user to name an intermediate command, a helper, or a file | A demand that the user name the route |
 | Decide by meaning, not by keyword overlap | A denial because the request and the file share no words |
 
@@ -396,6 +418,7 @@ actions:
 
 | Situation | What the scope allows | What it denies |
 | --- | --- | --- |
+| Any read: a file, a listing, a search, a log, a `git` inspection | Everything; knowledge needs no authority | Nothing |
 | Verify, check, test, or confirm; the work is reported done or live; a short "ok" | The commands, logs, and inspections the check needs | Work the request does not cover |
 | Audit, review, or investigation | Reading the code or document, and a new report, summary, or notes file | Any change to the code or document under review |
 | A settings change | Investigating the impact of that setting | Changing any other setting |
@@ -404,6 +427,10 @@ actions:
 The table illustrates the rule; it is not a list the reviewer checks one by one. That keeps
 the prompt small as new kinds of request appear, and keeps the reviewer judging scope rather
 than matching vocabulary.
+
+Reading is the one row that does not depend on the request at all. The gate lets a read pass
+on the floor, so the reviewer is rarely asked, and the user never has to authorize knowledge
+(§4.1.3). The scrutiny belongs to what the agent does with what it read.
 
 ## 6. Read before write
 
@@ -497,6 +524,10 @@ These are limits of the host hooks, not defects that a later version can remove:
   follow a pipe into a second shell, or read a script that the command runs. A command
   that builds a destructive path at run time is not caught by it. Section 4.4 gives the
   exact set of matches.
+- **A shell read passes only in its plain form.** A read that pipes into another command,
+  redirects its output, substitutes a result, or names a verb outside the floor's list
+  reaches review, where it can be denied. The floor can prove the plain form and cannot
+  prove the composed one, and it accepts that cost to keep the read exception narrow.
 - **A host may keep a session's parent to itself.** The harness can know that a subagent
   belongs to a parent, and store it, without exposing it to a plugin. When neither
   `session.created` nor the client lookup provides the link, the child is reviewed as a

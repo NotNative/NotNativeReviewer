@@ -1,6 +1,6 @@
 {
   "name": "notnativereviewer",
-  "version": "20261116-10",
+  "version": "20261116-11",
   "description": "Turn-scoped tool-use permission reviewer for OpenCode. Reviews tool calls at the permission evaluate hook against the user's intent.",
   "type": "module",
   "main": "index.js",
@@ -12,6 +12,7 @@
     "hooks.js",
     "evaluate.js",
     "floor.js",
+    "read-grammar.js",
     "package.js",
     "observation.js",
     "questions.js",

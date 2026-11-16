@@ -2,6 +2,10 @@
 # The folder holds reasoning at a point in time. It is kept locally only.
 docs/planning/
 
+# Validation artifacts. Live test transcripts and reports from a run against
+# an installed build. Development evidence, kept locally only.
+docs/validation/
+
 # Local development tools. Not published, not part of the shipped product.
 # The quality gate, version bump, and probes run from the developer's working tree.
 tools/

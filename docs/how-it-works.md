@@ -381,6 +381,22 @@ If a delegated session has no primary conversation, the gate denies with
 `primary_unavailable` and asks the agent to tell the user what it was asked to do, and to
 request the overall goal. It does not review the task on its own authority.
 
+### 5.5 What counts as part of the request
+
+The gate asks whether a call serves the user's request, not whether the user named the call.
+Four cases matter in practice, and the reviewer is told each one:
+
+| Situation | Result |
+| --- | --- |
+| The user asks to verify, check, test, or confirm, or says the work is done or live | The calls the check needs are approved |
+| The user answers with a short acknowledgement ("ok", "go ahead", "we are good to go") | The routine step the agent proposed immediately before it is approved |
+| The user asks for an audit, review, or investigation | Reading is approved, and a new report, summary, or notes file is approved; a change to the subject under review is denied |
+| The agent proposes a new capability nobody asked for | Denied, even when it would help |
+
+A deliverable is not a capability. Writing `audit-report.md` finishes an audit; adding a
+feature to the audited code does not. A request for review therefore protects the reviewed
+code without silencing the agent's findings.
+
 ## 6. Read before write
 
 A call that changes an existing file must follow a read of that same file, and the file

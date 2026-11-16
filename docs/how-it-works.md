@@ -177,8 +177,10 @@ change:
 A change is easier to judge as a change. The escaped form made the reviewer decode a
 string before it could judge the work, and it judged the change abstractly as a result.
 
-The gate calls the model with `temperature: 0` and a hard deadline of 20 seconds. The
-reviewer returns one JSON object with these fields:
+The gate calls the model with `temperature: 0` and a hard deadline of 120 seconds. The
+deadline is a cap, not a target: a slow local model can spend much of it on pre-fill, and
+a reviewer that answers sooner is used at once. The reviewer returns one JSON object with
+these fields:
 
 | Field | Meaning |
 | --- | --- |

@@ -14,8 +14,13 @@
 
 import { byteLength } from "./bytes.js";
 
-/** The deadline for one reviewer call, in milliseconds. */
-export const REVIEW_DEADLINE_MS = 20000;
+/**
+ * The deadline for one reviewer call, in milliseconds.
+ *
+ * A slow local model can spend a long time on pre-fill alone, so the default is generous.
+ * The deadline is a cap, not a target: a reviewer that answers sooner is used at once.
+ */
+export const REVIEW_DEADLINE_MS = 120000;
 
 /** The reviewer policy. Short sentences, one instruction per sentence. */
 const REVIEWER_POLICY = [

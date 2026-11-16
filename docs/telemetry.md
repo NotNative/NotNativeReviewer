@@ -80,7 +80,7 @@ A denial that the reviewer made looks like this:
 evaluate.start
 floor.classified        class=egress
 projection.built        packageItems=3 validAnchors=2
-reviewer.called         deadlineMs=20000
+reviewer.called         deadlineMs=120000
 reviewer.answered       replyBytes=210
 decision.validated      outcome=deny_with_guidance confidence=0.8
 decision.applied        effect=deny

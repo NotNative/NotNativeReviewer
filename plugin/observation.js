@@ -28,9 +28,13 @@ export const WRITE_VERDICT = Object.freeze({
  * One instance per session; the gate keeps a map keyed by sessionID.
  */
 export class ObservationStore {
-  constructor() {
+  /**
+   * @param {{ maxSessions?: number }} [options]
+   */
+  constructor(options = {}) {
     /** @type {Map<string, { reads: Map<string, object> }>} */
     this._sessions = new Map();
+    this._maxSessions = Number.isInteger(options.maxSessions) && options.maxSessions > 0 ? options.maxSessions : 64;
   }
 
   /**
@@ -105,7 +109,13 @@ export class ObservationStore {
     return { verdict: WRITE_VERDICT.MATCH };
   }
 
-  /** Forget a session when the host says it ended. */
+  /**
+   * Forget a session.
+   *
+   * Only an explicit operator action or a test calls this. The host event stream never
+   * does, for the same reason the package store does not forget: a mis-timed lifecycle
+   * event must not erase what the gate has seen.
+   */
   forget(sessionID) {
     return this._sessions.delete(sessionID);
   }
@@ -122,6 +132,12 @@ export class ObservationStore {
     if (!state) {
       state = { reads: new Map() };
       this._sessions.set(sessionID, state);
+      // Bounded without an event-driven cleanup, so a long-lived host cannot grow the map.
+      while (this._sessions.size > this._maxSessions) {
+        const oldest = this._sessions.keys().next();
+        if (oldest.done) break;
+        this._sessions.delete(oldest.value);
+      }
     }
     return state;
   }

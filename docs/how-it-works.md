@@ -335,6 +335,10 @@ Nothing in the host event stream removes a package. An idle parent, a finished s
 a reconnecting client must not delete the evidence behind a live call, because the call it
 would block is one the user already asked for.
 
+Packages are held per session and never shared. A prompt or an answer in one session cannot
+read, replace, or reset another session's package or its snapshot, so concurrent sessions
+and subagents review against their own conversation.
+
 Every user input also takes a snapshot of the package as it stands at that input. If the
 current package later has no user record, the reviewer uses the snapshot instead of denying.
 `projection.built` names which one answered in `packageSource`, and a fallback also writes

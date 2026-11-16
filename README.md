@@ -157,4 +157,4 @@ Until a live instance confirms them, treat the gate as unproven, not as absent.
 
 ## License
 
-MIT.
+MIT. See [LICENSE](LICENSE).

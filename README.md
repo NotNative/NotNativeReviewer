@@ -139,7 +139,7 @@ notnativereviewer/
   uninstall.ps1    Windows uninstaller
   uninstall.sh     macOS and Linux uninstaller
   plugin/          the plugin source; every file ships
-  tools/           quality gate and tests
+  tools/           local quality gate and tests (kept out of Git)
   docs/            documentation
 ```
 

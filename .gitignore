@@ -2,6 +2,10 @@
 # The folder holds reasoning at a point in time. It is kept locally only.
 docs/planning/
 
+# Local development tools. Not published, not part of the shipped product.
+# The quality gate, version bump, and probes run from the developer's working tree.
+tools/
+
 # Operating system files
 .DS_Store
 Thumbs.db

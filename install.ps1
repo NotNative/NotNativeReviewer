@@ -217,6 +217,25 @@ try {
 }
 Write-Host "step 3/5  staged $($sourceFiles.Count) file(s) into $stagingDir"
 
+# The audit log is the operator's record of what the gate did. A reinstall replaces the
+# directory, so the log is carried into the new one instead of being deleted with it.
+$telemetryName = "$PluginName-telemetry.jsonl"
+$carriedLog = $false
+foreach ($candidate in @((Join-Path $stagingParent $telemetryName), (Join-Path $pluginDir $telemetryName))) {
+    if (Test-Path -LiteralPath $candidate -PathType Leaf) {
+        try {
+            Copy-Item -LiteralPath $candidate -Destination (Join-Path $stagingDir $telemetryName) -Force
+            $carriedLog = $true
+        } catch {
+            try { Remove-Item -LiteralPath $stagingDir -Recurse -Force } catch { }
+            Fail "cannot carry the audit log $candidate into $stagingDir : $($_.Exception.Message)"
+        }
+    }
+}
+if ($carriedLog) {
+    Write-Host "          carried the audit log forward: $telemetryName"
+}
+
 # --- Step 4: replace ---------------------------------------------------------
 
 if (Test-Path -LiteralPath $pluginDir) {

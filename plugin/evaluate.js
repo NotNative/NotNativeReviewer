@@ -133,18 +133,7 @@ async function evaluateCall(input) {
   }
 
   const projection = await buildProjection(input, event, targetPaths, classification);
-  telemetry.record(STEP.PROJECTION_BUILT, {
-    sessionID,
-    data: {
-      packageItems: projection.packageItems.length,
-      validAnchors: projection.validAnchors.length,
-      hasLatestUser: Boolean(projection.latestUserID),
-      payloadExcerptBytes: byteLength(projection.payloadExcerpt || ""),
-      // `request` is null when the package is missing, so guard the read.
-      promptBytes: projection.request ? byteLength(projection.request.prompt) : 0,
-      missingPackage: Boolean(projection.missingPackage),
-    },
-  });
+  recordProjection(telemetry, sessionID, projection);
 
   if (projection.missingPackage) {
     const decision = buildFailureDecision(FAILURE_REASON.PACKAGE_UNAVAILABLE);
@@ -158,6 +147,24 @@ async function evaluateCall(input) {
   }
 
   return applyDecision(event, telemetry, sessionID, reviewed.decision);
+}
+
+/** Record the projection and the package that answered; a fallback gets its own step. */
+function recordProjection(telemetry, sessionID, projection) {
+  telemetry.record(STEP.PROJECTION_BUILT, {
+    sessionID,
+    data: {
+      packageItems: projection.packageItems.length,
+      validAnchors: projection.validAnchors.length,
+      hasLatestUser: Boolean(projection.latestUserID),
+      payloadExcerptBytes: byteLength(projection.payloadExcerpt || ""),
+      // `request` is null when the package is missing, so guard the read.
+      promptBytes: projection.request ? byteLength(projection.request.prompt) : 0,
+      missingPackage: Boolean(projection.missingPackage),
+      packageSource: projection.source || "none",
+    },
+  });
+  if (projection.source === "previous") telemetry.record(STEP.PACKAGE_FALLBACK, { sessionID, data: { used: "previous" } });
 }
 
 /**
@@ -213,7 +220,7 @@ async function buildProjection(input, event, targetPaths, classification) {
 
   // Without a user record in the selected package there is no authority to judge against.
   if (selected.items.length === 0 || validAnchors.length === 0) {
-    return { missingPackage: true, packageItems: [], latestUserID: null, validAnchors: [], payloadExcerpt: "", request: null };
+    return { missingPackage: true, packageItems: [], latestUserID: null, validAnchors: [], payloadExcerpt: "", request: null, source: selected.source };
   }
   const payloadExcerpt = await readPayloadExcerpt(input, event, targetPaths);
 
@@ -234,6 +241,7 @@ async function buildProjection(input, event, targetPaths, classification) {
     payloadExcerpt,
     request,
     packageMetadata: selected.metadata,
+    source: selected.source,
   };
 }
 

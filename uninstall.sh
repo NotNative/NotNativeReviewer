@@ -161,14 +161,28 @@ manifest="$plugin_dir/package.json"
 # from, so the ownership check and the directory name agree.
 owner_name=$(manifest_field "$manifest" name)
 [ "$owner_name" = "$PLUGIN_NAME" ] || fail "$manifest has name '$owner_name', expected '$PLUGIN_NAME'; not removing $plugin_dir"
-printf 'step 2/3  ownership checked: name is %s\n' "$PLUGIN_NAME"
+printf 'step 2/4  ownership checked: name is %s\n' "$PLUGIN_NAME"
 
-# --- Step 3: remove ----------------------------------------------------------
+# --- Step 3: keep the audit log ----------------------------------------------
+# The log is the operator's only record of what the gate did. Removing the plugin must not
+# destroy it, so it moves beside the plugin directory, and the next install adopts it back.
+
+telemetry_name="$PLUGIN_NAME-telemetry.jsonl"
+telemetry_path="$plugin_dir/$telemetry_name"
+kept_path="$(dirname -- "$plugin_dir")/$telemetry_name"
+if [ -f "$telemetry_path" ]; then
+    mv "$telemetry_path" "$kept_path" || fail "cannot keep the audit log: move $telemetry_path to $kept_path"
+    printf 'step 3/4  kept the audit log at %s\n' "$kept_path"
+else
+    printf 'step 3/4  no audit log to keep\n'
+fi
+
+# --- Step 4: remove ----------------------------------------------------------
 
 rm -rf "$plugin_dir" || fail "cannot remove $plugin_dir"
 [ -e "$plugin_dir" ] && fail "removal failed: $plugin_dir still exists"
 
-printf 'step 3/3  removed %s\n\n' "$plugin_dir"
+printf 'step 4/4  removed %s\n\n' "$plugin_dir"
 printf 'Next step: restart OpenCode. The plugin is gone after the next start, and the\n'
 printf 'gate is absent (the ungoverned state).\n'
 exit 0

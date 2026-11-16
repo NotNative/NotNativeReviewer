@@ -166,7 +166,10 @@ function appendAnswer(deps, input) {
   if (!packages || typeof packages.recordUserInput !== "function") return false;
   const text = trimToBytes(input.text, MAX_ANSWER_BYTES);
   if (text.trim() === "") return false;
-  if (!packages.recordUserInput({ sessionID: input.sessionID, id: input.id, text })) return false;
+  // An answer appends to the request that prompted it. It creates a package only when the
+  // session has none, and it moves the fallback snapshot like any other user input.
+  const appended = packages.recordUserInput({ sessionID: input.sessionID, id: input.id, text });
+  if (!appended.recorded) return false;
   deps.telemetry.record(STEP.PACKAGE_UPDATED, {
     sessionID: input.sessionID,
     data: { source: input.source, bytes: byteLength(text), ...packages.summarise(input.sessionID) },

@@ -40,53 +40,92 @@ export const CAP = Object.freeze({
 });
 
 /**
- * Holds the conversation package for one session.
+ * Holds the conversation package for one session: the current package, and the snapshot
+ * taken at the newest user input.
  *
- * One instance per session. The gate keeps a map of these, keyed by sessionID.
+ * Authority rule: only a user input creates a package.
+ *   - A prompt or an answer creates the package when the session has none, and appends to
+ *     it afterwards.
+ *   - Every user input also refreshes `previous`, a snapshot of the package as it stood at
+ *     that input. If the current package later loses its records, a review can fall back to
+ *     the snapshot instead of denying a call it should have judged.
+ *   - Agent text appends to the current package as evidence. It never creates a package and
+ *     never moves the snapshot.
+ *
+ * The transcript keeps growing, so a bare "ok" still authorizes the proposal before it. A
+ * snapshot is a shallow copy: a record's text and time never change after it is written.
+ *
+ * No host event forgets a package. The map is bounded by a number of sessions and evicts
+ * the least recently used one when it is full, so a long-lived host cannot grow it without
+ * limit.
  */
 export class ReviewerPackageStore {
-  constructor() {
-    /** @type {Map<string, object>} */
+  /**
+   * @param {{ maxSessions?: number }} [options]
+   */
+  constructor(options = {}) {
+    /** @type {Map<string, { current: object | null, previous: object | null, used: number }>} */
     this._sessions = new Map();
+    this._maxSessions = Number.isInteger(options.maxSessions) && options.maxSessions > 0 ? options.maxSessions : 64;
+    this._clock = 0;
   }
 
   /**
    * Record a user input: a prompt, a question answer, or a page answer.
    *
    * @param {{ sessionID: string, id: string, text: string, at?: number }} input
-   * @returns {boolean} true when the record was added
+   * @returns {{ recorded: boolean, snapshot: boolean }}
    */
   recordUserInput(input) {
-    return this._record({ ...input, trust: TRUST.USER_AUTHORED });
+    return this._recordUser(input);
   }
 
   /**
-   * Record agent or synthetic text. The caller supplies the trust class.
+   * Record agent text. Appends only: a package is never created here.
    *
    * @param {{ sessionID: string, id: string, text: string, trust: string, at?: number }} input
    * @returns {boolean} true when the record was added
    */
   recordText(input) {
-    return this._record(input);
+    if (!input || !input.sessionID || !input.id) return false;
+    const state = this._sessions.get(input.sessionID);
+    if (!state || !state.current) return false;
+    const added = appendRecord(state.current, input);
+    if (added) this._touch(input.sessionID, state);
+    return added;
   }
 
   /**
    * Select records for the reviewer prompt, under the byte budget.
-   * Newest are kept, then presented in conversation order.
+   *
+   * The current package answers when it holds a user record. Otherwise the snapshot taken
+   * at the newest user input answers, so a package that lost its records does not turn into
+   * a denial. `source` names the one that answered, so telemetry can show a fallback.
    *
    * @param {{ sessionID: string }} request
-   * @returns {{ items: Array<object>, latestUserID: string | null, metadata: object }}
+   * @returns {{ items: Array<object>, latestUserID: string | null, metadata: object, source: string }}
    */
   selectForReview(request) {
-    const state = this._sessions.get(request.sessionID);
-    if (!state) {
-      return { items: [], latestUserID: null, metadata: { total: 0, selected: 0, omitted: 0, bytes: 0, truncated: false } };
+    const state = request && this._sessions.get(request.sessionID);
+    if (!state || !state.current) {
+      return { items: [], latestUserID: null, metadata: emptyMetadata(), source: "none" };
     }
-    const selected = selectRecords(state.records);
-    return { ...selected, latestUserID: readLatestUserID(selected.items) };
+    const current = selectWithAuthority(state.current.records);
+    if (current.authority) return { ...current.result, source: "current" };
+    if (state.previous) {
+      const previous = selectWithAuthority(state.previous.records);
+      if (previous.authority) return { ...previous.result, source: "previous" };
+    }
+    return { ...current.result, source: "none" };
   }
 
-  /** Forget a session when the host says it ended. */
+  /**
+   * Forget a session.
+   *
+   * Only an explicit operator action or a test calls this. The host event stream never
+   * does, because a lifecycle event that arrives at the wrong moment must not delete the
+   * evidence behind a live call.
+   */
   forget(sessionID) {
     return this._sessions.delete(sessionID);
   }
@@ -94,51 +133,154 @@ export class ReviewerPackageStore {
   /** Read-only summary for telemetry. Counts and trust composition only, no text. */
   summarise(sessionID) {
     const state = this._sessions.get(sessionID);
-    if (!state) return { records: 0, bytes: 0, trusts: {} };
+    if (!state || !state.current) {
+      return { records: 0, bytes: 0, trusts: {}, previous: Boolean(state && state.previous) };
+    }
     const trusts = {};
     let bytes = 0;
-    for (const record of state.records) {
+    for (const record of state.current.records) {
       trusts[record.trust] = (trusts[record.trust] || 0) + 1;
       bytes += record.bytes;
     }
-    return { records: state.records.length, bytes, trusts };
+    return { records: state.current.records.length, bytes, trusts, previous: Boolean(state.previous) };
   }
 
-  /** Add one record, in conversation order, and keep the package bounded. */
-  _record(input) {
-    if (!input.sessionID || !input.id) return false;
+  /** Add one user record, and refresh the snapshot a review can fall back to. */
+  _recordUser(input) {
+    if (!input || !input.sessionID || !input.id) return { recorded: false, snapshot: false };
     const text = trimToBytes(String(input.text || ""), CAP.PACKAGE_PER_ITEM_BYTES);
-    if (text.trim() === "") return false;
+    if (text.trim() === "") return { recorded: false, snapshot: false };
 
-    const state = this._state(input.sessionID);
-    if (state.seen.has(input.id)) return false;
-    state.seen.add(input.id);
-    state.seq += 1;
-
-    state.records.push({
-      id: String(input.id),
-      trust: input.trust,
-      text,
-      at: Number.isFinite(input.at) ? input.at : Date.now(),
-      seq: state.seq,
-      bytes: byteLength(text),
-    });
-    // An assistant message is often recorded after the answer it precedes. Order by the
-    // host's message time, with the append sequence as a stable tie-breaker.
-    state.records.sort((a, b) => a.at - b.at || a.seq - b.seq);
-    if (state.records.length > CAP.RECORDS) state.records.splice(0, state.records.length - CAP.RECORDS);
-    return true;
-  }
-
-  /** The session state, created on first use. */
-  _state(sessionID) {
-    let state = this._sessions.get(sessionID);
+    let state = this._sessions.get(input.sessionID);
     if (!state) {
-      state = { seq: 0, records: [], seen: new Set() };
-      this._sessions.set(sessionID, state);
+      state = { current: null, previous: null, used: 0 };
+      this._sessions.set(input.sessionID, state);
     }
-    return state;
+    // A repeated input is the same input. It must not duplicate the record.
+    if (state.current && state.current.seen.has(input.id)) return { recorded: false, snapshot: false };
+
+    if (!state.current) state.current = newPackage();
+
+    const added = appendRecord(state.current, { ...input, text, trust: TRUST.USER_AUTHORED });
+    if (!added) return { recorded: false, snapshot: false };
+    // The snapshot is the package as it stands at this input: it keeps the newest authority
+    // and the conversation before it, so a fallback is still a review of real evidence.
+    state.previous = clonePackage(state.current);
+    this._touch(input.sessionID, state);
+    return { recorded: true, snapshot: true };
   }
+
+  /** Mark a session as most recently used, and keep the map bounded. */
+  _touch(sessionID, state) {
+    this._clock += 1;
+    state.used = this._clock;
+    // Re-insert, so iteration order stays least-recently-used first.
+    this._sessions.delete(sessionID);
+    this._sessions.set(sessionID, state);
+    while (this._sessions.size > this._maxSessions) {
+      const oldest = this._sessions.keys().next();
+      if (oldest.done) break;
+      this._sessions.delete(oldest.value);
+    }
+  }
+}
+
+/** An empty package. */
+function newPackage() {
+  return { seq: 0, records: [], seen: new Set() };
+}
+
+/**
+ * Copy a package's list and id set. The records themselves are never mutated after they are
+ * written, so the copy shares them and costs one array and one set.
+ */
+function clonePackage(pkg) {
+  return { seq: pkg.seq, records: pkg.records.slice(), seen: new Set(pkg.seen) };
+}
+
+/** Append one record to a package, in conversation order, and keep it bounded. */
+function appendRecord(pkg, input) {
+  if (!input || !input.id) return false;
+  const text = trimToBytes(String(input.text || ""), CAP.PACKAGE_PER_ITEM_BYTES);
+  if (text.trim() === "") return false;
+  if (pkg.seen.has(input.id)) return false;
+  pkg.seen.add(input.id);
+  pkg.seq += 1;
+  pkg.records.push({
+    id: String(input.id),
+    trust: input.trust,
+    text,
+    at: Number.isFinite(input.at) ? input.at : Date.now(),
+    seq: pkg.seq,
+    bytes: byteLength(text),
+  });
+  // An assistant message is often recorded after the answer it precedes. Order by the
+  // host's message time, with the append sequence as a stable tie-breaker.
+  pkg.records.sort((a, b) => a.at - b.at || a.seq - b.seq);
+  if (pkg.records.length > CAP.RECORDS) pkg.records.splice(0, pkg.records.length - CAP.RECORDS);
+  return true;
+}
+
+/** The metadata of a package that holds nothing. */
+function emptyMetadata() {
+  return { total: 0, selected: 0, omitted: 0, bytes: 0, truncated: false };
+}
+
+/**
+ * Select one package, and guarantee that the newest user record is in the selection.
+ *
+ * Without the guarantee, a long agentic turn can push the user's request out of the newest
+ * window and leave the reviewer judging a call with no stated authority. The guarantee is
+ * the difference between a rare false deny and a reliable review.
+ */
+function selectWithAuthority(records) {
+  const selected = selectRecords(records);
+  let items = selected.items;
+  if (readValidAnchors(items).length === 0) {
+    const newest = newestAuthority(records);
+    if (newest) {
+      const budgeted = budgetText(newest.text, CAP.PACKAGE_PER_ITEM_BYTES);
+      if (budgeted.text !== "") {
+        items = withAuthorityItem(items, {
+          id: newest.id,
+          trust: newest.trust,
+          text: budgeted.text,
+          truncated: budgeted.truncated,
+          at: newest.at,
+        });
+      }
+    }
+  }
+  const latestUserID = readLatestUserID(items);
+  return {
+    authority: latestUserID !== null,
+    result: {
+      items,
+      latestUserID,
+      metadata: { ...selected.metadata, selected: items.length },
+    },
+  };
+}
+
+/** The newest authority record in a package, or null. */
+function newestAuthority(records) {
+  for (let i = records.length - 1; i >= 0; i -= 1) {
+    if (AUTHORITY_CLASSES.has(records[i].trust)) return records[i];
+  }
+  return null;
+}
+
+/** Put the authority record at the head of the selection and keep the caps. */
+function withAuthorityItem(items, authority) {
+  const next = [authority, ...items];
+  while (next.length > CAP.PACKAGE_ITEMS) next.splice(1, 1);
+  let bytes = 0;
+  for (const item of next) bytes += byteLength(item.text);
+  while (bytes > CAP.PACKAGE_TOTAL_BYTES && next.length > 1) {
+    const dropped = next.splice(1, 1)[0];
+    bytes -= byteLength(dropped.text);
+  }
+  return next;
 }
 
 /**

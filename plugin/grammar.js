@@ -381,7 +381,7 @@ function failureMessage(reasonCode, detail) {
     case FAILURE_REASON.REVIEWER_ANCHOR_INVALID:
       return "NotNativeReviewer's reviewer cited text that is not in the user's request, so it denied this call.";
     case FAILURE_REASON.PACKAGE_UNAVAILABLE:
-      return "NotNativeReviewer has no record of the user's request for this session, so it denied this call.";
+      return "NotNativeReviewer has no record of the user's request in this session, so it denied this call. Do not retry this call. Ask the user a short clarifying question about what they want done, for example: 'In order to do this, could you specify what you need done?' Ask about the goal, not for permission, and do not ask for an approval, a keyword, or a retry.";
     case FAILURE_REASON.WRITE_UNREAD:
       return "This call changes a file that the conversation has not read. Read it first, then retry.";
     case FAILURE_REASON.WRITE_STALE:

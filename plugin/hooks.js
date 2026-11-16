@@ -14,6 +14,9 @@ import { recordWriteDigest } from "./ledger.js";
 import { TRUST } from "./package.js";
 import { recordQuestionReply, recordRenderAnswer } from "./questions.js";
 
+/** How many sessions' models to remember. Bounded, because sessions may never end. */
+const MAX_REMEMBERED_MODELS = 256;
+
 /**
  * Register every hook that the host provides, and record each result.
  *
@@ -106,12 +109,13 @@ export function registerPrompt(ctx, deps) {
     if (!sessionID || !prompt) return undefined;
     const messageID = prompt.messageID || prompt.id || digest(String(prompt.text || ""));
     const at = prompt.time && Number.isFinite(prompt.time.created) ? prompt.time.created : Date.now();
-    const recorded = deps.stores.packages.recordUserInput({
+    const admitted = deps.stores.packages.recordUserInput({
       sessionID,
       id: messageID,
       text: String(prompt.text || ""),
       at,
     });
+    const recorded = admitted.recorded;
     deps.telemetry.record(STEP.PROMPT_ADMITTED, {
       sessionID,
       data: {
@@ -120,11 +124,18 @@ export function registerPrompt(ctx, deps) {
         files: Array.isArray(prompt.files) ? prompt.files.length : 0,
         messageDigest: messageID ? digest(messageID) : null,
         recorded,
+        snapshot: admitted.snapshot,
         ...deps.stores.packages.summarise(sessionID),
       },
     });
     if (recorded) {
       deps.telemetry.record(STEP.PACKAGE_UPDATED, {
+        sessionID,
+        data: { source: "prompt", ...deps.stores.packages.summarise(sessionID) },
+      });
+    }
+    if (admitted.snapshot) {
+      deps.telemetry.record(STEP.PACKAGE_SNAPSHOT, {
         sessionID,
         data: { source: "prompt", ...deps.stores.packages.summarise(sessionID) },
       });
@@ -172,6 +183,8 @@ export function registerContext(ctx, deps) {
  *
  * The host carries a ModelRef: `providerID`, `id`, and an optional `variant`. Keep only
  * those fields, so a larger event object does not reach the transport.
+ *
+ * The map is capped so that a host which never ends sessions cannot grow it without limit.
  */
 function rememberSessionModel(deps, sessionID, model) {
   if (!sessionID || !model || typeof model !== "object") return;
@@ -183,6 +196,11 @@ function rememberSessionModel(deps, sessionID, model) {
   const remembered = { providerID, id };
   if (model.variant) remembered.variant = model.variant;
   models.set(sessionID, remembered);
+  while (models.size > MAX_REMEMBERED_MODELS) {
+    const oldest = models.keys().next();
+    if (oldest.done) break;
+    models.delete(oldest.value);
+  }
 }
 
 /** The model that this session was last seen using, or undefined. */
@@ -358,8 +376,12 @@ function isFileWriting(tool) {
 }
 
 /**
- * Register the event stream. Question answers join the package. A session end forgets
- * that session, so a long-lived host does not keep every session forever.
+ * Register the event stream. Question answers join the package.
+ *
+ * The stream observes and records; it never forgets. A lifecycle event that arrives at the
+ * wrong moment (a subagent ending, an idle parent, a reconnecting client) must not delete
+ * the evidence behind a live call. Only a new user input supersedes a package, and the
+ * superseded one is retained as the previous package.
  */
 export function registerEvents(ctx, deps) {
   if (!ctx.event || typeof ctx.event.subscribe !== "function") return false;
@@ -378,15 +400,6 @@ export function registerEvents(ctx, deps) {
         }
         const sessionID = event && (event.sessionID || (event.properties && event.properties.sessionID));
         if (!sessionID) return;
-        if (isSessionEnd(event)) {
-          deps.stores.packages.forget(sessionID);
-          if (deps.stores.observations && typeof deps.stores.observations.forget === "function") {
-            deps.stores.observations.forget(sessionID);
-          }
-          if (deps.stores.models && typeof deps.stores.models.delete === "function") deps.stores.models.delete(sessionID);
-          deps.telemetry.record(STEP.EVENT_OBSERVED, { sessionID, data: { eventType: event.type, forgotten: true } });
-          return;
-        }
         deps.telemetry.record(STEP.EVENT_OBSERVED, { sessionID, data: { eventType: event.type } });
       },
     );
@@ -394,10 +407,4 @@ export function registerEvents(ctx, deps) {
     return false;
   }
   return true;
-}
-
-/** Whether an event marks the end of a session. */
-function isSessionEnd(event) {
-  const type = String((event && event.type) || "");
-  return type === "session.end" || type === "session.deleted";
 }

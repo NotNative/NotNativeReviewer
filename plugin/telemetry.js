@@ -36,6 +36,8 @@ export const STEP = Object.freeze({
   HOOK_REGISTERED: "hook.registered",
   PROMPT_ADMITTED: "prompt.admitted",
   PACKAGE_UPDATED: "package.updated",
+  PACKAGE_SNAPSHOT: "package.snapshot",
+  PACKAGE_FALLBACK: "package.fallback",
   CONTEXT_OBSERVED: "context.observed",
   EVENT_OBSERVED: "event.observed",
   EVALUATE_START: "evaluate.start",

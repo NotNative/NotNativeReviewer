@@ -41,7 +41,7 @@ OpenCode or OpenChamber.
 | `session.prompt` | Records a user prompt in the package. |
 | `session.context` | Records agent text in the package as evidence. Agent text is never authority. |
 | `tool.execute.after` | Records the digest a write leaves, and appends a page answer. |
-| event stream | Appends question answers, and forgets a session when it ends. |
+| event stream | Appends question answers. It observes session lifecycle and forgets nothing. |
 
 ### 3.1 Why the gate blocks at `tool.execute.before`
 
@@ -325,6 +325,26 @@ any other user input; it does not start a new authority window.
 User and agent text stay interleaved on purpose. A short "ok" only means something next to
 the proposal it answers, so the gate never separates the user's lines from the agent's.
 
+### 5.1 The package is created by user input, and only by user input
+
+A package exists because the user spoke. A prompt or a question or page answer creates it.
+Agent text only appends to a package that already exists; a transcript made only of agent
+text carries no authority and is not reviewable.
+
+Nothing in the host event stream removes a package. An idle parent, a finished subagent, or
+a reconnecting client must not delete the evidence behind a live call, because the call it
+would block is one the user already asked for.
+
+Every user input also takes a snapshot of the package as it stands at that input. If the
+current package later has no user record, the reviewer uses the snapshot instead of denying.
+`projection.built` names which one answered in `packageSource`, and a fallback also writes
+`package.fallback`.
+
+When neither the package nor its snapshot holds a user record, the gate denies with
+`package_unavailable` and tells the model to ask the user a short clarifying question about
+what they want done. It asks for the goal, not for permission, and it does not invite a
+retry.
+
 ## 6. Read before write
 
 A call that changes an existing file must follow a read of that same file, and the file
@@ -381,7 +401,7 @@ allows.
 | The deadline passes | Deny, `reviewer_timeout` |
 | The output is malformed twice | Deny, `reviewer_output_malformed` |
 | The reviewer cites text the user did not write | Deny, `reviewer_anchor_invalid` |
-| No record of the user's request | Deny, `package_unavailable` |
+| No user record in the package or its snapshot | Deny, `package_unavailable`; the model is told to ask a clarifying question |
 | A modify of a file the session never read | Deny, `write_unread` |
 | A modify where the file changed since the read | Deny, `write_stale` |
 
@@ -394,9 +414,11 @@ These are limits of the host hooks, not defects that a later version can remove:
 
 - **A create is reviewable but not protected by a read.** OpenCode's `write` takes no
   precondition, so a file can change between the gate's read and the write.
-- **A session has no reset hook.** The gate forgets a session when the host emits
-  `session.end` or `session.deleted`. A host that emits neither keeps the package until the
-  process exits.
+- **A session has no reset hook.** The gate never forgets a session on a lifecycle event,
+  because a mis-timed event would delete a live request. It keeps the 64 most recently used
+  sessions and evicts the least recent when a new one arrives. A session that the host
+  drops and later resumes may therefore arrive with no package, which reads as
+  `package_unavailable` and asks the user to restate the goal.
 - **The gate cannot see a configured `deny`.** That decision is final and does not reach
   the hook, which is why the gate can only tighten.
 - **Hook order is plugin load order.** A plugin that loads before this one can change the

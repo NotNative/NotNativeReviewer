@@ -225,7 +225,7 @@ check out that version in the repository and run the installer.
 | The telemetry file does not exist | The plugin never ran | The sink writes the file at the first record. Check step 1 of §5 |
 | `hook.registered` with `registered: false` | The host does not provide that hook | The gate is partly ungoverned at that point; a call reaches no review there |
 | Every call denies | The reviewer cannot answer | Check that the conversation's model is reachable; look for `reviewer_unavailable` in the telemetry file |
-| A deny says "no record of the user's request" | The prompt hook did not run for that session | The gate denies rather than guess; report it as a defect |
+| A deny says "no record of the user's request" | The prompt hook did not run for that session, or the package was lost | The gate asks the model to get a clarification from the user rather than retry. Look for `packageSource=none` in `projection.built`, and report a lost package as a defect |
 | The installer stops before writing | The resolved path is not the one you expected | Run the installer with an explicit `-Target` or `--target` |
 
 ## 8. Unverified behaviours

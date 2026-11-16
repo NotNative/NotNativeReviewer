@@ -57,6 +57,8 @@ The step list is closed. A step outside the list is a defect and is recorded as
 | `hook.registered` | One hook registration, with `registered` true or false |
 | `prompt.admitted` | The prompt hook recorded a user input |
 | `package.updated` | A user input was appended to the package |
+| `package.snapshot` | A user input refreshed the fallback snapshot |
+| `package.fallback` | The current package had no user record, so the snapshot answered |
 | `context.observed` | The context hook saw the message list |
 | `event.observed` | The event stream delivered an event |
 | `evaluate.start` | A permission evaluation began |
@@ -86,6 +88,22 @@ decision.validated      outcome=deny_with_guidance confidence=0.8
 decision.applied        effect=deny
 evaluate.end
 ```
+
+A package that lost its records falls back to the snapshot taken at the newest user input:
+
+```
+evaluate.start
+floor.classified        class=consequential
+projection.built        packageItems=9 validAnchors=1 packageSource=previous
+package.fallback        used=previous
+reviewer.called         deadlineMs=120000
+decision.applied        effect=allow
+evaluate.end
+```
+
+If neither the package nor its snapshot holds a user record, the chain ends at `fail.closed`
+with `reason=package_unavailable`, and the deny asks the model for a clarification from the
+user instead of a retry.
 
 A read records what it saw, and passes:
 

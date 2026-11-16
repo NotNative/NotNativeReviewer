@@ -164,9 +164,27 @@ $ownerName = Read-ManifestField $manifestPath 'name'
 if ($ownerName -ne $PluginName) {
     Fail "$manifestPath has name '$ownerName', expected '$PluginName'; not removing $pluginDir"
 }
-Write-Host "step 2/3  ownership checked: name is $PluginName"
+Write-Host "step 2/4  ownership checked: name is $PluginName"
 
-# --- Step 3: remove ----------------------------------------------------------
+# --- Step 3: keep the audit log ----------------------------------------------
+# The log is the operator's only record of what the gate did. Removing the plugin must not
+# destroy it, so it moves beside the plugin directory, and the next install adopts it back.
+
+$telemetryName = "$PluginName-telemetry.jsonl"
+$telemetryPath = Join-Path $pluginDir $telemetryName
+$keptPath = Join-Path (Split-Path -Parent $pluginDir) $telemetryName
+if (Test-Path -LiteralPath $telemetryPath -PathType Leaf) {
+    try {
+        Move-Item -LiteralPath $telemetryPath -Destination $keptPath -Force
+    } catch {
+        Fail "cannot keep the audit log: move $telemetryPath to $keptPath : $($_.Exception.Message)"
+    }
+    Write-Host "step 3/4  kept the audit log at $keptPath"
+} else {
+    Write-Host "step 3/4  no audit log to keep"
+}
+
+# --- Step 4: remove ----------------------------------------------------------
 
 try {
     Remove-Item -LiteralPath $pluginDir -Recurse -Force
@@ -178,7 +196,7 @@ if (Test-Path -LiteralPath $pluginDir) {
     Fail "removal failed: $pluginDir still exists"
 }
 
-Write-Host "step 3/3  removed $pluginDir"
+Write-Host "step 4/4  removed $pluginDir"
 Write-Host ""
 Write-Host "Next step: restart OpenCode. The plugin is gone after the next start, and the"
 Write-Host "gate is absent (the ungoverned state)."

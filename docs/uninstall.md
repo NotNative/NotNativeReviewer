@@ -27,7 +27,10 @@ Run the script for your platform from the repository root.
 2. It resolves the config directory the same way the installer does (§2), and appends
    `plugins/<name>/`.
 3. It checks that the directory holds a `package.json` with that same name.
-4. It removes the directory and reports the path.
+4. It moves `notnativereviewer-telemetry.jsonl`, when the directory holds one, to
+   `<config-dir>/plugins/notnativereviewer-telemetry.jsonl`, so the audit log is not
+   destroyed with the plugin. The next install adopts it back.
+5. It removes the directory and reports the path.
 
 The ownership check is what makes the script safe. The script removes a directory only
 when that directory says, in its own `package.json`, that it is NotNativeReviewer. A directory
@@ -85,11 +88,12 @@ reviewer means a safe call.
 | Other plugins under `plugins/` | Present, unchanged |
 | The `plugins/notnativereviewer/` directory | Removed |
 | Conversation history | Unchanged; the gate never wrote to it |
-| Telemetry records already written | Kept; the log is append-only |
+| Telemetry records already written | Kept; the log moves to `<config-dir>/plugins/notnativereviewer-telemetry.jsonl` |
 
-If the plugin wrote a telemetry file and you want the disk space back, delete that file
-yourself. The scripts do not touch it, because the log is the operator's record, not the
-plugin's property.
+The log is the operator's record, not the plugin's property, so neither script deletes it.
+The uninstaller moves it out of the directory it is about to remove, and the installer
+carries it back in, so a reinstall continues the same log. To reclaim the space, delete
+that file yourself.
 
 ## 6. Reinstall
 

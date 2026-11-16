@@ -131,15 +131,27 @@ so the floor reads the command text itself against a closed grammar:
 
 | Condition | Example |
 | --- | --- |
-| One command, with no chaining, redirection, expansion, or substitution | `git status --short` |
-| The verb only reads: file readers, search, listing, `git` inspection | `rg --files plugin` |
+| No chaining, redirection, expansion, or substitution | `git status --short` |
+| Every stage's verb only reads: file readers, search, listing, `git` inspection | `rg --files plugin` |
 | No flag that writes, deletes, or runs another command | `find . -delete` fails here |
 
 Anything outside the grammar reaches review, where a write belongs. That asymmetry is the
 point: the exception can open a read and can never open a write. Quoting counts, so a search
-for `"a|b"` is a read because the bar is inside a literal string, and an unterminated quote is
-not. A pager is absent from the verb list because `less` can run a shell command from its own
-prompt.
+for `"a|b"` is a read because the bar is inside a literal string, while `"a$(id)"` is not. A
+pager is absent from the verb list because `less` can run a shell command from its own prompt.
+
+A pipeline is judged as one piece. The text is split on an unquoted pipe, and **every** stage
+must be a reader with no write or exec flag:
+
+| Pipeline | Floor |
+| --- | --- |
+| `Get-Content log \| Select-String error` | read |
+| `git log --oneline -20 \| Select-String gate` | read |
+| `Get-Content log \| Remove-Item x` | review |
+| `Get-Content log \| Select-String x \| sh` | review |
+
+One stage outside the list carries the whole command to review. Approving the first stage and
+letting the rest ride is exactly how a write would arrive dressed as a read.
 
 A read passes even when the session has no package, which removes a class of
 `package_unavailable` denial from the moment a gate is installed.
@@ -524,10 +536,10 @@ These are limits of the host hooks, not defects that a later version can remove:
   follow a pipe into a second shell, or read a script that the command runs. A command
   that builds a destructive path at run time is not caught by it. Section 4.4 gives the
   exact set of matches.
-- **A shell read passes only in its plain form.** A read that pipes into another command,
-  redirects its output, substitutes a result, or names a verb outside the floor's list
-  reaches review, where it can be denied. The floor can prove the plain form and cannot
-  prove the composed one, and it accepts that cost to keep the read exception narrow.
+- **A shell read passes only in its plain form.** A command whose stages are not all listed
+  readers — a pipe into `bash`, a pager, a redirect, a substitution, or a verb the list does
+  not hold — reaches review, where it can be denied. The floor can prove the listed form and
+  cannot prove the rest, and it accepts that cost to keep the read exception narrow.
 - **A host may keep a session's parent to itself.** The harness can know that a subagent
   belongs to a parent, and store it, without exposing it to a plugin. When neither
   `session.created` nor the client lookup provides the link, the child is reviewed as a

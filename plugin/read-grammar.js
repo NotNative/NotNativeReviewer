@@ -4,11 +4,13 @@
  * A shell call carries no declared effect; the command text is the only statement of what
  * it will do. This module answers one question about that text: is it a plain read?
  *
- * The answer is a closed grammar, not a pattern that guesses. One command, no character
- * that chains, redirects, expands, or substitutes, and a verb from a list of readers. A
- * command outside the grammar is not read here at all, so the caller sends it to review,
- * which is where a write belongs. The asymmetry is the guarantee: this module can open a
- * read and can never open a write.
+ * The answer is a closed grammar, not a pattern that guesses. A command with no chaining,
+ * redirection, expansion, or substitution, where every stage of a pipeline is a reader on
+ * the list below. One stage outside it, and the whole command goes to review: the command
+ * is judged as one piece, never approved on the strength of its first stage. A command
+ * outside the grammar is not read here at all, so the caller sends it to review, which is
+ * where a write belongs. The asymmetry is the guarantee: this module can open a read and
+ * can never open a write.
  *
  * No imports.
  */
@@ -18,36 +20,58 @@ const MAX_READ_COMMAND = 400;
 
 /**
  * Characters that can chain a second command, redirect output, expand a variable, or
- * substitute a result. A plain read needs none of them.
+ * substitute a result. A pipe is absent: it separates stages, and each stage is judged on
+ * its own.
  */
-const SHELL_OPERATOR = /[|;&<>`$()\n\r]/;
+const SHELL_OPERATOR = /[;&<>`$()\n\r]/;
 
 /**
- * Whether the text carries an operator outside a literal position.
+ * Split a command into pipeline stages, or return null when the text is not a plain read.
  *
- * `|`, `;`, `&`, `<`, and `>` are literal inside any quotes, so a search for `"a|b"` is a
- * read. A `$` or a backtick still expands inside double quotes, so those are operators
- * wherever they appear outside single quotes. An unterminated quote is not a plain read.
+ * A pipe outside quotes separates stages. Every other operator ends the attempt, so the
+ * caller sends the whole command to review: the command is judged as one piece, and one
+ * stage outside the grammar takes the rest of it with it.
+ *
+ * `|`, `;`, `&`, `<`, and `>` are literal inside quotes, so a search for `"a|b"` is one
+ * stage. A `$` or a backtick still expands inside double quotes, so those end the attempt
+ * wherever they appear outside single quotes. An unterminated quote is not a plain read,
+ * and neither is an empty stage: `a || b` and `a | | b` are not pipelines of readers.
+ *
+ * @param {string} text
+ * @returns {readonly string[] | null}
  */
-function hasShellOperator(text) {
+function splitStages(text) {
+  const stages = [];
+  let current = "";
   let quote = "";
   for (const character of text) {
     if (quote === "'") {
+      current += character;
       if (character === "'") quote = "";
       continue;
     }
     if (quote === '"') {
+      if (character === "$" || character === "`") return null;
+      current += character;
       if (character === '"') quote = "";
-      else if (character === "$" || character === "`") return true;
       continue;
     }
     if (character === "'" || character === '"') {
       quote = character;
+      current += character;
       continue;
     }
-    if (SHELL_OPERATOR.test(character)) return true;
+    if (character === "|") {
+      stages.push(current);
+      current = "";
+      continue;
+    }
+    if (SHELL_OPERATOR.test(character)) return null;
+    current += character;
   }
-  return quote !== "";
+  if (quote !== "") return null;
+  stages.push(current);
+  return stages.every((stage) => stage.trim() !== "") ? stages : null;
 }
 
 /**
@@ -63,6 +87,9 @@ const READ_COMMANDS = Object.freeze(new Set([
   "get-content", "gc", "select-string", "sls", "get-childitem", "gci", "get-item",
   "get-itemproperty", "get-command", "get-help", "get-location", "get-date",
   "get-filehash", "get-acl", "get-process", "get-service", "resolve-path", "test-path",
+  // Stage transforms. These take their input from the pipe and write nothing: a stage that
+  // could name an output file, such as `sort -o`, is left out instead.
+  "select-object", "sort-object", "measure-object", "group-object",
 ]));
 
 /** A flag that writes a file, deletes a match, runs another command, or loads a diff driver. */
@@ -97,7 +124,8 @@ const GIT_LIST_ONLY = Object.freeze({
 });
 
 /**
- * Whether a shell command only reads.
+ * Whether a shell command only reads. Every stage of a pipeline must be a reader on its
+ * own; the command is not approved in parts.
  *
  * @param {string} command the command text, as written
  * @returns {boolean}
@@ -106,9 +134,14 @@ export function isReadOnlyCommand(command) {
   if (typeof command !== "string") return false;
   const text = command.trim();
   if (text === "" || text.length > MAX_READ_COMMAND) return false;
-  if (hasShellOperator(text)) return false;
+  const stages = splitStages(text);
+  if (stages === null) return false;
+  return stages.every((stage) => isReadOnlyStage(stage));
+}
 
-  const tokens = tokeniseCommand(text);
+/** Whether one stage of a pipeline is a reader with no write or exec flag. */
+function isReadOnlyStage(stage) {
+  const tokens = tokeniseCommand(stage);
   if (tokens.length === 0) return false;
   const verb = commandName(tokens[0]);
   if (verb === "") return false;

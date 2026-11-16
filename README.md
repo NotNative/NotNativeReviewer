@@ -49,10 +49,11 @@ reviewer decision. See [docs/how-it-works.md](docs/how-it-works.md) §4.4.
 The gate has three layers:
 
 1. **A deterministic floor.** A read-only call with no external effect passes with no model
-   call, and that includes a plain shell read (`ls`, `git status`, `Get-Content`), so an
-   agent never needs permission to look at something. A call that leaves the workspace
-   always reaches review, even a `GET`, because a URL can carry data. One shell command is
-   denied by the floor instead: a command that destroys a system root.
+   call, and that includes a plain shell read (`ls`, `git status`, `Get-Content`) and a
+   pipeline where every stage is a reader, so an agent never needs permission to look at
+   something. A call that leaves the workspace always reaches review, even a `GET`, because a
+   URL can carry data. One shell command is denied by the floor instead: a command that
+   destroys a system root.
 2. **A reviewer.** The gate asks the conversation's own model — not a second model — to
    judge the call against the user's request. The reviewer is a separate agent with its own
    prompt and a fresh context. It cannot call tools, it cannot read files, and it does not

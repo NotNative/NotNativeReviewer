@@ -362,10 +362,13 @@ not the user's instruction, so the gate gives a delegated session two layers:
 | Primary | The conversation that delegated the session, captured when the link is known | The user's own request. Highest authority |
 | Delegated | The task text in the subagent's session, and that agent's own text | Subordinate. It can carry out the primary conversation, never extend it |
 
-The gate learns the link from `session.created`, which carries the session's `parentID`. If
-that event does not arrive, it asks the host client once, when the session's first prompt
-arrives. A prompt written before the link is known is reclassified as delegated, so an event
-race cannot leave agent text holding user authority.
+The gate tries two sources for the link: `session.created`, which carries the session's
+`parentID`, and one host-client lookup when the session's first prompt arrives. On the host
+tested on 2026-11-16 neither delivered it: a live subagent session recorded its own prompt
+with no parent, while the harness database held the correct `parent_id`. Until a working
+source is added, a delegated session is reviewed as a top-level one, and its task text
+carries the user's authority. §8 records that limit. A prompt recorded before a late link is
+reclassified as delegated, so an event race cannot leave agent text holding user authority.
 
 The reviewer receives both layers, with the policy that the delegated task cannot override
 the primary conversation, and that a conflict is a denial. The gate also enforces the
@@ -384,18 +387,23 @@ request the overall goal. It does not review the task on its own authority.
 ### 5.5 What counts as part of the request
 
 The gate asks whether a call serves the user's request, not whether the user named the call.
-Four cases matter in practice, and the reviewer is told each one:
+The reviewer is given one scope rule and two concrete scopes, not a catalogue of allowed
+actions:
 
-| Situation | Result |
-| --- | --- |
-| The user asks to verify, check, test, or confirm, or says the work is done or live | The calls the check needs are approved |
-| The user answers with a short acknowledgement ("ok", "go ahead", "we are good to go") | The routine step the agent proposed immediately before it is approved |
-| The user asks for an audit, review, or investigation | Reading is approved, and a new report, summary, or notes file is approved; a change to the subject under review is denied |
-| The agent proposes a new capability nobody asked for | Denied, even when it would help |
+> Scope is the user's request plus what it implies. Allow any routine, proportionate action
+> that finishes it, whether or not the user named it; deny what reaches beyond it, even when
+> it would help.
 
-A deliverable is not a capability. Writing `audit-report.md` finishes an audit; adding a
-feature to the audited code does not. A request for review therefore protects the reviewed
-code without silencing the agent's findings.
+| Situation | What the scope allows | What it denies |
+| --- | --- | --- |
+| Verify, check, test, or confirm; the work is reported done or live; a short "ok" | The commands, logs, and inspections the check needs | Work the request does not cover |
+| Audit, review, or investigation | Reading the code or document, and a new report, summary, or notes file | Any change to the code or document under review |
+| A settings change | Investigating the impact of that setting | Changing any other setting |
+| A new capability nobody asked for | Nothing; it is outside the request | The capability itself, however useful |
+
+The table illustrates the rule; it is not a list the reviewer checks one by one. That keeps
+the prompt small as new kinds of request appear, and keeps the reviewer judging scope rather
+than matching vocabulary.
 
 ## 6. Read before write
 
@@ -489,6 +497,11 @@ These are limits of the host hooks, not defects that a later version can remove:
   follow a pipe into a second shell, or read a script that the command runs. A command
   that builds a destructive path at run time is not caught by it. Section 4.4 gives the
   exact set of matches.
+- **A host may keep a session's parent to itself.** The harness can know that a subagent
+  belongs to a parent, and store it, without exposing it to a plugin. When neither
+  `session.created` nor the client lookup provides the link, the child is reviewed as a
+  top-level session and its task text carries the user's authority. A `delegation.observed`
+  record is the sign that the link was found.
 
 ## 9. What is not proven yet
 

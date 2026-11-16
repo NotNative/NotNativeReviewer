@@ -125,8 +125,26 @@ function readPostures() {
   }
 
   const options = { ...fromEnv, ...fromFile };
-  const source = present ? SETTINGS_FILE : Object.keys(fromEnv).length > 0 ? "environment" : "defaults";
+  const source = postureSource(fromFile, fromEnv, present);
   return { options, source, errors };
+}
+
+/**
+ * Name the layer that supplied the active posture.
+ *
+ * A forced close wins, so it is the posture to attribute when both are set. A file value
+ * wins over an environment value for the same key. When no posture is on, a file that was
+ * read is still the source, because it set the value to off.
+ *
+ * @param {object} fromFile the postures that the settings file enabled
+ * @param {object} fromEnv the postures that the environment enabled
+ * @param {boolean} present whether the settings file was read
+ * @returns {string}
+ */
+function postureSource(fromFile, fromEnv, present) {
+  if (fromFile.forceDeny || fromEnv.forceDeny) return fromFile.forceDeny ? SETTINGS_FILE : "environment";
+  if (fromFile.forceAllow || fromEnv.forceAllow) return fromFile.forceAllow ? SETTINGS_FILE : "environment";
+  return present ? SETTINGS_FILE : "defaults";
 }
 
 /**

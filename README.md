@@ -145,15 +145,19 @@ notnativereviewer/
 
 ## Status
 
-The first pass is built and tested against a mock host. No live OpenCode instance has
-loaded it yet, so these behaviours remain unverified:
+Tested against a mock host and run on a live OpenCode instance. On that instance the plugin
+loaded from the default global config directory, all six hooks registered, the reviewer
+answered with the session's own model, and decisions applied to tool calls.
 
-- whether OpenCode discovers a plugin under `OPENCODE_CONFIG_DIR`;
+These behaviours remain unverified:
+
+- whether OpenCode discovers a plugin under `OPENCODE_CONFIG_DIR` (only the default
+  global config path has been exercised);
 - whether the permission hook fires for a call that a rule already allows;
 - whether the hook supplies resolved absolute paths;
 - whether the plugin's `setup` writes a line that the operator can see.
 
-Until a live instance confirms them, treat the gate as unproven, not as absent.
+Treat the four items above as unproven until a live instance confirms them, not as absent.
 
 ## License
 

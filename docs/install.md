@@ -52,7 +52,8 @@ half-written plugin.
 - It does not write into OpenChamber's instance run directory.
 - It does not start or stop OpenCode or OpenChamber.
 - It does not run OpenCode, so install works with OpenCode closed.
-- It does not run the tests in `tools/`. Run those yourself (§5).
+- It does not run the local tests in `tools/`, which are not tracked. Run those yourself
+  when your copy includes them (§5).
 
 ## 3. Where the plugin is installed
 
@@ -149,6 +150,10 @@ either proven by a deny or unproven.
 
 ### 5.1 Run the tests yourself
 
+The tests and the quality gate live in `tools/`, a local development folder that is not
+tracked in this repository (see [.gitignore](../.gitignore)). If your copy does not include
+it, skip this section.
+
 ```sh
 node tools/check-quality.mjs
 node tools/test-gate.mjs
@@ -165,12 +170,13 @@ you trust an install.
 Step 3 needs the reviewer to disagree with the agent, which is hard to arrange on purpose. Use
 a test posture instead ([how-it-works.md](how-it-works.md) §12).
 
-The installed `nnr.env` closes every call, so a fresh install blocks tool calls at
-once. That is the deny proof. To let the reviewer decide each call again:
+The shipped `nnr.env` sets both postures to `0`, so a fresh install lets the reviewer
+decide each call. To prove a deny, turn the forced close on:
 
-1. Change `NNR_FORCE_DENY=1` to `NNR_FORCE_DENY=0` in
+1. Change `NNR_FORCE_DENY=0` to `NNR_FORCE_DENY=1` in
    `<config-dir>/plugins/notnativereviewer/nnr.env`.
-2. Restart OpenCode.
+2. Restart OpenCode. Every tool call is denied, including reads.
+3. Change the value back to `0` and restart to return to the normal gate.
 
 To prove the pair of directions:
 
@@ -185,9 +191,12 @@ A shell variable does not reach OpenCode when another program starts it, so use 
 
 ### 5.3 Check the installed copy without OpenCode
 
+This check uses a local development tool, which is not tracked in the repository. If your
+copy does not include `tools/`, skip this section.
+
 `tools/probe-installed.mjs` loads the plugin from the installed directory and drives one
-permission event through its hook. It reports the posture in the setup record, the effect on
-an egress call, and the effect on a plan read.
+permission event through its hook. It reports the posture and its source, the model named in
+the setup record, the effect on an egress call, and the effect on a safe read.
 
 ```sh
 node tools/probe-installed.mjs

@@ -482,9 +482,9 @@ change that file and restart OpenCode. The file is read once, at setup.
 <config-dir>/plugins/notnativereviewer/nnr.env
 ```
 
-The installed file closes every call. Thus a fresh install blocks tool calls until the
-operator sets `NNR_FORCE_DENY=0`. Set the value to `0` to let the reviewer decide
-each call again.
+The shipped file sets both postures to `0`, so the reviewer decides each call. To confirm
+that the gate closes a call, set `NNR_FORCE_DENY=1` and restart OpenCode. Set it back to
+`0` to let the reviewer decide each call again.
 
 Format of the file:
 

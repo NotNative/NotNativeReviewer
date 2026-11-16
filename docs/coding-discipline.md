@@ -63,6 +63,9 @@ must not turn an `allow` into a `deny`, and must not turn a `deny` into an `allo
 
 ## 6. The check script
 
+The scripts named in this section and in §7 live in the local `tools/` folder, which is not
+tracked in the repository. A published clone does not include them.
+
 `tools/check-quality.mjs` reads every `.js` file in `plugin/` and fails when:
 - a file has more than 500 lines;
 - a function or method body has more than 60 lines;

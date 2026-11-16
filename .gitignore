@@ -1,0 +1,27 @@
+# Planning artifacts. Not published, not part of the shipped product.
+# The folder holds reasoning at a point in time. It is kept locally only.
+docs/planning/
+
+# Operating system files
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# Editor and IDE settings
+.vscode/
+.idea/
+*.swp
+*~
+
+# Node.js
+node_modules/
+package-lock.json
+npm-debug.log*
+yarn-error.log*
+
+# Test and tool output
+coverage/
+*.log
+
+# Local telemetry, when a sink writes a file beside the repository
+notnativereviewer-telemetry.jsonl

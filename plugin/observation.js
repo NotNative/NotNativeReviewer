@@ -127,6 +127,26 @@ export class ObservationStore {
     return { reads: state.reads.size };
   }
 
+  /**
+   * The read entries that state persistence writes (§5.6).
+   *
+   * The digest is what makes the ledger safe to carry: a write that follows a reload is
+   * checked against the content the session actually saw, so a file that changed while the
+   * plugin was unloaded still denies as stale.
+   *
+   * @param {number} [perSession] newest entries to keep for one session
+   * @returns {Array<{ session: string, path: string, digest: string, at: string }>}
+   */
+  exportForState(perSession = 256) {
+    const entries = [];
+    for (const [sessionID, state] of this._sessions) {
+      for (const [path, entry] of [...state.reads.entries()].slice(-perSession)) {
+        entries.push({ session: sessionID, path, digest: entry.digest, at: entry.at });
+      }
+    }
+    return entries;
+  }
+
   _state(sessionID) {
     let state = this._sessions.get(sessionID);
     if (!state) {

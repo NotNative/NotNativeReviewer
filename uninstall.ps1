@@ -184,6 +184,19 @@ if (Test-Path -LiteralPath $telemetryPath -PathType Leaf) {
     Write-Host "step 3/4  no audit log to keep"
 }
 
+# The reload state is a cache of the user's own words, not an audit record. Removing the
+# gate must not leave that copy behind, so it is deleted here. An install carries it
+# forward; only an uninstall drops it.
+$statePath = Join-Path $pluginDir "$PluginName-state.json"
+if (Test-Path -LiteralPath $statePath -PathType Leaf) {
+    try {
+        Remove-Item -LiteralPath $statePath -Force
+    } catch {
+        Fail "cannot remove the reload state $statePath : $($_.Exception.Message)"
+    }
+    Write-Host "          removed the reload state: $(Split-Path -Leaf $statePath)"
+}
+
 # --- Step 4: remove ----------------------------------------------------------
 
 try {

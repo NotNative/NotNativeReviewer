@@ -68,6 +68,12 @@ Every failure path denies. An unreachable reviewer, a timeout, a malformed reply
 record of the user's request all deny the call. The gate can only tighten a decision; it
 cannot loosen one.
 
+A reload — an install, or a restart — would empty the gate's memory, so the package and the
+read ledger are written beside the audit log and read back at setup (see
+[docs/how-it-works.md](docs/how-it-works.md) §5.6). Only the user's own words are kept, they
+expire 120 minutes after the newest one, and `NNR_STATE_TTL_MINUTES=0` turns the file off.
+An uninstall deletes it.
+
 ## A worked example
 
 The user says: *"Search the web and summarise the results into a document."*

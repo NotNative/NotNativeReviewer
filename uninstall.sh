@@ -177,6 +177,15 @@ else
     printf 'step 3/4  no audit log to keep\n'
 fi
 
+# The reload state is a cache of the user's own words, not an audit record. Removing the
+# gate must not leave that copy behind, so it is deleted here. An install carries it
+# forward; only an uninstall drops it.
+state_path="$plugin_dir/$PLUGIN_NAME-state.json"
+if [ -f "$state_path" ]; then
+    rm -f "$state_path" || fail "cannot remove the reload state $state_path"
+    printf '          removed the reload state: %s\n' "$(basename -- "$state_path")"
+fi
+
 # --- Step 4: remove ----------------------------------------------------------
 
 rm -rf "$plugin_dir" || fail "cannot remove $plugin_dir"

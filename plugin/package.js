@@ -229,6 +229,28 @@ export class ReviewerPackageStore {
     };
   }
 
+  /**
+   * The records that state persistence writes (§5.6).
+   *
+   * Only user and delegated-task text is exported. Agent text is evidence, and the gate sees
+   * it again as the session continues; authority is what a reload would otherwise lose.
+   *
+   * @param {number} [perSession] newest records to keep for one session
+   * @returns {Array<{ id: string, parent: string | null, users: Array<object> }>}
+   */
+  exportForState(perSession = 32) {
+    const sessions = [];
+    for (const [sessionID, state] of this._sessions) {
+      const records = (state.current ? state.current.records : [])
+        .filter((record) => record.trust === TRUST.USER_AUTHORED || record.trust === TRUST.AGENT_DELEGATED)
+        .slice(-perSession)
+        .map((record) => ({ id: record.id, text: record.text, at: record.at }));
+      if (records.length === 0) continue;
+      sessions.push({ id: sessionID, parent: state.parentID || null, users: records });
+    }
+    return sessions;
+  }
+
   /** Add one user record, and refresh the snapshot a review can fall back to. */
   _recordUser(input) {
     if (!input || !input.sessionID || !input.id) return { recorded: false, snapshot: false };

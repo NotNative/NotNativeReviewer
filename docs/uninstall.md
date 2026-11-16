@@ -89,11 +89,17 @@ reviewer means a safe call.
 | The `plugins/notnativereviewer/` directory | Removed |
 | Conversation history | Unchanged; the gate never wrote to it |
 | Telemetry records already written | Kept; the log moves to `<config-dir>/plugins/notnativereviewer-telemetry.jsonl` |
+| The reload state (`notnativereviewer-state.json`) | Deleted; it holds the user's own words, not an audit record |
 
 The log is the operator's record, not the plugin's property, so neither script deletes it.
 The uninstaller moves it out of the directory it is about to remove, and the installer
 carries it back in, so a reinstall continues the same log. To reclaim the space, delete
 that file yourself.
+
+The reload state is the opposite case. An install carries it forward so a test cycle does
+not lose the user's authority, but an uninstall deletes it: the file is a cache of what the
+user said, and removing the gate should not leave that copy on disk. A reinstall after an
+uninstall therefore starts cold, and the next call denies until the user speaks.
 
 ## 6. Reinstall
 

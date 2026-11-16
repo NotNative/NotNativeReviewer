@@ -82,15 +82,22 @@ The installed directory holds these files:
 | `hooks.js` | Registration for each host hook |
 | `evaluate.js` | The enforcement sequence |
 | `floor.js` | Deterministic classification |
+| `read-grammar.js` | Whether a shell command only reads |
 | `package.js` | Reviewer package: the conversation text |
 | `observation.js` | Read record for read-before-write |
 | `questions.js` | Question and page answers, appended to the package |
 | `grammar.js` | Decision grammar and failure posture |
 | `reviewer.js` | Reviewer prompt and model call |
 | `payload.js` | Reads the file content a call will write or run |
+| `ledger.js` | The read-before-write check |
+| `dedupe.js` | One review per tool call |
+| `state.js` | The package and ledger carried across a reload |
+| `settings.js` | The `nnr.env` reader |
+| `version.js` | The version string |
 | `files.js` | The gate's own file access |
 | `bytes.js` | Byte measurement |
 | `telemetry.js` | The local step log |
+| `nnr.env` | Settings, installed as-is |
 
 ### 3.1 Install to a chosen directory
 

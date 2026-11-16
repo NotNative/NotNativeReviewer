@@ -173,19 +173,18 @@ printf '%s\n' "$source_files" | while IFS= read -r file; do
 done
 printf 'step 3/5  staged %s file(s) into %s\n' "$source_count" "$staging_dir"
 
-# The audit log is the operator's record of what the gate did. A reinstall replaces the
-# directory, so the log is carried into the new one instead of being deleted with it.
-telemetry_name="$PLUGIN_NAME-telemetry.jsonl"
-carried_log=0
-for candidate in "$staging_parent/$telemetry_name" "$plugin_dir/$telemetry_name"; do
-    if [ -f "$candidate" ]; then
-        cp "$candidate" "$staging_dir/$telemetry_name" || { rm -rf "$staging_dir"; fail "cannot carry the audit log $candidate"; }
-        carried_log=1
-    fi
+# The audit log and the reload state are the operator's record of what the gate did and
+# what the user asked for. A reinstall replaces the directory, so both are carried into
+# the new one instead of being deleted with it.
+for carry_name in "$PLUGIN_NAME-telemetry.jsonl" "$PLUGIN_NAME-state.json"; do
+    for candidate in "$staging_parent/$carry_name" "$plugin_dir/$carry_name"; do
+        if [ -f "$candidate" ]; then
+            cp "$candidate" "$staging_dir/$carry_name" || { rm -rf "$staging_dir"; fail "cannot carry $candidate"; }
+            printf '          carried forward: %s\n' "$carry_name"
+            break
+        fi
+    done
 done
-if [ "$carried_log" -eq 1 ]; then
-    printf '          carried the audit log forward: %s\n' "$telemetry_name"
-fi
 
 # --- Step 4: replace ---------------------------------------------------------
 

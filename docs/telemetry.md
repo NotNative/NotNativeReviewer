@@ -59,6 +59,7 @@ The step list is closed. A step outside the list is a defect and is recorded as
 | `package.updated` | A user input was appended to the package |
 | `package.snapshot` | A user input refreshed the fallback snapshot |
 | `package.fallback` | The current package had no user record, so the snapshot answered |
+| `state.restored` | Setup read the state file, or did not: `reason`, `sessions`, `reads`, `ageMinutes`, `ttlMinutes` |
 | `delegation.observed` | A session's parent was learned, with whether the primary layer was captured |
 | `context.observed` | The context hook saw the message list |
 | `event.observed` | The event stream delivered an event |

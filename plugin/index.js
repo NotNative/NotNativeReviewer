@@ -24,7 +24,8 @@ import { ObservationStore } from "./observation.js";
 import { buildFileLayer } from "./files.js";
 import { buildDedupe } from "./dedupe.js";
 import { registerHooks } from "./hooks.js";
-import { readPluginDirectory, readSettings, SETTINGS_FILE } from "./settings.js";
+import { parseTtlMinutes, readPluginDirectory, readSettings, SETTINGS_FILE } from "./settings.js";
+import { DEFAULT_TTL_MINUTES, StateFile } from "./state.js";
 import { VERSION } from "./version.js";
 
 export const id = "notnativereviewer";
@@ -65,11 +66,50 @@ function defaultSink() {
 
 /** Find a synchronous append-to-file writer, or null. */
 function detectAppend() {
+  const fs = nodeFs();
+  if (fs && typeof fs.appendFileSync === "function") return (path, text) => fs.appendFileSync(path, text, "utf8");
+  const scope = typeof globalThis !== "undefined" ? globalThis : {};
+  if (scope.Deno && typeof scope.Deno.writeTextFileSync === "function") {
+    return (path, text) => scope.Deno.writeTextFileSync(path, text, { append: true });
+  }
+  return null;
+}
+
+/**
+ * Write the state file in one step.
+ *
+ * The text goes to a temporary name and is renamed over the real one, so a reader never sees
+ * half a file. A failure leaves the previous file in place, which still restores or still
+ * fails closed; either way nothing is invented.
+ *
+ * @returns {((path: string, text: string) => void) | null}
+ */
+function detectWriter() {
+  const fs = nodeFs();
+  if (!fs || typeof fs.writeFileSync !== "function") return null;
+  return (path, text) => {
+    const temp = `${path}.tmp`;
+    fs.writeFileSync(temp, text, "utf8");
+    try {
+      if (typeof fs.chmodSync === "function") fs.chmodSync(temp, 0o600);
+    } catch {
+      // A file mode is best effort; Windows takes its permissions from the profile directory.
+    }
+    if (typeof fs.renameSync === "function") {
+      fs.renameSync(temp, path);
+      return;
+    }
+    fs.writeFileSync(path, text, "utf8");
+  };
+}
+
+/** The Node filesystem module, when the host exposes it. */
+function nodeFs() {
   const scope = typeof globalThis !== "undefined" ? globalThis : {};
   if (typeof scope.require === "function") {
     try {
       const fs = scope.require("node:fs");
-      if (fs && typeof fs.appendFileSync === "function") return (path, text) => fs.appendFileSync(path, text, "utf8");
+      if (fs) return fs;
     } catch {
       // Fall through.
     }
@@ -78,15 +118,19 @@ function detectAppend() {
   if (process && typeof process.getBuiltinModule === "function") {
     try {
       const fs = process.getBuiltinModule("node:fs");
-      if (fs && typeof fs.appendFileSync === "function") return (path, text) => fs.appendFileSync(path, text, "utf8");
+      if (fs) return fs;
     } catch {
       // Fall through.
     }
   }
-  if (scope.Deno && typeof scope.Deno.writeTextFileSync === "function") {
-    return (path, text) => scope.Deno.writeTextFileSync(path, text, { append: true });
-  }
   return null;
+}
+
+/** The directory that holds the state file. A test can name a temporary one. */
+function stateDirectory(options) {
+  const named = options && options.stateDirectory;
+  if (typeof named === "string" && named !== "") return named;
+  return readPluginDirectory();
 }
 
 /** Join a directory and a file name with the separator that the directory uses. */
@@ -111,6 +155,8 @@ function readPostures() {
   const fromEnv = {};
   if (env.NNR_FORCE_DENY === "1") fromEnv.forceDeny = true;
   if (env.NNR_FORCE_ALLOW === "1") fromEnv.forceAllow = true;
+  const envTtl = parseTtlMinutes(env.NNR_STATE_TTL_MINUTES);
+  if (envTtl.minutes !== null) fromEnv.stateTtlMs = envTtl.minutes * 60000;
 
   let fromFile = {};
   let present = false;
@@ -123,6 +169,7 @@ function readPostures() {
   } catch (error) {
     errors = [`could not read ${SETTINGS_FILE}: ${error && error.message}`];
   }
+  if (envTtl.error) errors = [envTtl.error, ...errors];
 
   const options = { ...fromEnv, ...fromFile };
   const source = postureSource(fromFile, fromEnv, present);
@@ -186,6 +233,15 @@ export const setup = async (ctx, options = {}) => {
   const settings = mergeOptions(postures.options, options);
   // One review per tool call, though the host can send a call through two hooks (§3.2).
   const seen = buildDedupe();
+  // The package and the ledger survive a reload for a bounded time (§5.6). `0` turns it off.
+  const ttlMs = Number.isFinite(settings.stateTtlMs) ? settings.stateTtlMs : DEFAULT_TTL_MINUTES * 60000;
+  const state = new StateFile({
+    directory: stateDirectory(settings),
+    ttlMs,
+    layer: buildFileLayer(),
+    writer: detectWriter(),
+    onFailure: (reason) => telemetry.record(STEP.STATE_RESTORED, { ok: false, data: { reason: `write:${reason}` } }),
+  });
 
   telemetry.record(STEP.SETUP, {
     data: {
@@ -210,7 +266,21 @@ export const setup = async (ctx, options = {}) => {
     telemetry.record(STEP.UNGOVERNED, { ok: false, data: { setting: SETTINGS_FILE, error } });
   }
 
-  registerHooks(ctx, { telemetry, stores, fileLayer, options: settings, seen });
+  const restored = state.restoreInto(stores);
+  telemetry.record(STEP.STATE_RESTORED, {
+    ok: restored.ok,
+    data: {
+      reason: restored.reason,
+      sessions: restored.sessions,
+      reads: restored.reads,
+      links: restored.links,
+      expired: restored.expired,
+      ageMinutes: restored.ageMinutes,
+      ttlMinutes: Math.round(ttlMs / 60000),
+    },
+  });
+
+  registerHooks(ctx, { telemetry, stores, fileLayer, options: settings, seen, state });
 
   telemetry.record(STEP.UNGOVERNED, {
     data: { gate: "active", note: "hooks registered; the gate denies a call when the reviewer cannot decide" },

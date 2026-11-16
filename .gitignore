@@ -33,3 +33,7 @@ coverage/
 
 # Local telemetry, when a sink writes a file beside the repository
 notnativereviewer-telemetry.jsonl
+
+# State carried across a reload: the user's own words, kept beside the audit log
+notnativereviewer-state.json
+notnativereviewer-state.json.tmp

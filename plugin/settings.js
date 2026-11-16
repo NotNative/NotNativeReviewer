@@ -28,7 +28,7 @@ import { buildFileLayer } from "./files.js";
 export const SETTINGS_FILE = "nnr.env";
 
 /** The keys that the gate reads. Any other key is ignored. */
-export const KNOWN_KEYS = Object.freeze(["NNR_FORCE_DENY", "NNR_FORCE_ALLOW"]);
+export const KNOWN_KEYS = Object.freeze(["NNR_FORCE_DENY", "NNR_FORCE_ALLOW", "NNR_STATE_TTL_MINUTES"]);
 
 /**
  * Parse the text of a settings file into a plain object.
@@ -91,7 +91,28 @@ export function readSettings(directory, options = {}) {
   if (typeof text !== "string" || text === "") return { options: {}, present: false, errors: [] };
 
   const { values, errors } = parseSettings(text);
-  return { options: toOptions(values), present: true, errors };
+  const parsed = toOptions(values);
+  const ttl = parseTtlMinutes(values.NNR_STATE_TTL_MINUTES);
+  if (ttl.error) errors.push(ttl.error);
+  if (ttl.minutes !== null) parsed.stateTtlMs = ttl.minutes * 60000;
+  return { options: parsed, present: true, errors };
+}
+
+/**
+ * Read the state TTL from a settings value.
+ *
+ * The value is a whole number of minutes, and `0` turns persistence off. A value the gate
+ * cannot read disables persistence and reports why: an unreadable setting must not leave
+ * the user's authority on disk for longer than the operator meant.
+ *
+ * @param {string | undefined} raw
+ * @returns {{ minutes: number | null, error?: string }}
+ */
+export function parseTtlMinutes(raw) {
+  if (raw === undefined || raw === null) return { minutes: null };
+  const text = String(raw).trim();
+  if (/^\d+$/.test(text)) return { minutes: Number(text) };
+  return { minutes: 0, error: "NNR_STATE_TTL_MINUTES: expected a whole number of minutes (0 disables)" };
 }
 
 /**

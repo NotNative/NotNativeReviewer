@@ -217,23 +217,24 @@ try {
 }
 Write-Host "step 3/5  staged $($sourceFiles.Count) file(s) into $stagingDir"
 
-# The audit log is the operator's record of what the gate did. A reinstall replaces the
-# directory, so the log is carried into the new one instead of being deleted with it.
+# The audit log and the reload state are the operator's record of what the gate did and
+# what the user asked for. A reinstall replaces the directory, so both are carried into
+# the new one instead of being deleted with it.
 $telemetryName = "$PluginName-telemetry.jsonl"
-$carriedLog = $false
-foreach ($candidate in @((Join-Path $stagingParent $telemetryName), (Join-Path $pluginDir $telemetryName))) {
-    if (Test-Path -LiteralPath $candidate -PathType Leaf) {
-        try {
-            Copy-Item -LiteralPath $candidate -Destination (Join-Path $stagingDir $telemetryName) -Force
-            $carriedLog = $true
-        } catch {
-            try { Remove-Item -LiteralPath $stagingDir -Recurse -Force } catch { }
-            Fail "cannot carry the audit log $candidate into $stagingDir : $($_.Exception.Message)"
+$stateName = "$PluginName-state.json"
+foreach ($carryName in @($telemetryName, $stateName)) {
+    foreach ($candidate in @((Join-Path $stagingParent $carryName), (Join-Path $pluginDir $carryName))) {
+        if (Test-Path -LiteralPath $candidate -PathType Leaf) {
+            try {
+                Copy-Item -LiteralPath $candidate -Destination (Join-Path $stagingDir $carryName) -Force
+                Write-Host "          carried forward: $carryName"
+            } catch {
+                try { Remove-Item -LiteralPath $stagingDir -Recurse -Force } catch { }
+                Fail "cannot carry $candidate into $stagingDir : $($_.Exception.Message)"
+            }
+            break
         }
     }
-}
-if ($carriedLog) {
-    Write-Host "          carried the audit log forward: $telemetryName"
 }
 
 # --- Step 4: replace ---------------------------------------------------------

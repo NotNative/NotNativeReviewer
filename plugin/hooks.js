@@ -50,6 +50,15 @@ export function registerHooks(ctx, deps) {
   return { registered, missing };
 }
 
+/** Write the state file after a change (§5.6). A failed write never decides a call. */
+function saveState(deps) {
+  try {
+    if (deps.state && typeof deps.state.save === "function") deps.state.save(deps.stores);
+  } catch {
+    // The in-memory stores still answer.
+  }
+}
+
 /** Register the enforcement hook (D-018). */
 export function registerEvaluate(ctx, deps) {
   if (!ctx.permission || typeof ctx.permission.hook !== "function") return false;
@@ -76,6 +85,7 @@ export function registerEvaluate(ctx, deps) {
     // the hook sets `event.effect` and `event.message` (10-platform-research.md §2).
     // The gate only ever tightens: it never turns a deny into an allow.
     applyToEvent(event, result);
+    saveState(deps);
     return result;
   });
   return true;
@@ -143,6 +153,7 @@ export function registerPrompt(ctx, deps) {
         data: { source: "prompt", ...deps.stores.packages.summarise(sessionID) },
       });
     }
+    saveState(deps);
     return undefined;
   });
   return true;
@@ -311,6 +322,8 @@ export function registerToolBefore(ctx, deps) {
       // A throw is what blocks the call at this layer.
       throw new Error(message);
     }
+    // A read that passed changed the ledger; the package may have changed too (§5.6).
+    saveState(deps);
     return undefined;
   });
   return true;
@@ -387,6 +400,8 @@ export function registerToolAfter(ctx, deps) {
     } catch {
       // A malformed tool result must not break the tool result hook.
     }
+    // A read or a write changed the ledger, and a page answer may have changed authority.
+    saveState(deps);
     return undefined;
   });
   return true;
@@ -453,6 +468,7 @@ export function registerEvents(ctx, deps) {
           } catch {
             // A malformed answer must not break the event stream.
           }
+          saveState(deps);
           return;
         }
         // A created or updated session names its parent. That link is the only evidence
@@ -465,6 +481,7 @@ export function registerEvents(ctx, deps) {
               sessionID: info.id,
               data: { inherited: linked.inherited, via: "event" },
             });
+            saveState(deps);
           }
           return;
         }

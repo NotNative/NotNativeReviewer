@@ -56,6 +56,7 @@ export const FAILURE_REASON = Object.freeze({
   REVIEWER_ROLE_VIOLATION: "reviewer_role_violation",
   REVIEWER_ANCHOR_INVALID: "reviewer_anchor_invalid",
   PACKAGE_UNAVAILABLE: "package_unavailable",
+  PRIMARY_UNAVAILABLE: "primary_unavailable",
   WRITE_UNREAD: "write_unread",
   WRITE_STALE: "write_stale",
   CATASTROPHIC_COMMAND: "catastrophic_command",
@@ -126,11 +127,17 @@ function extractJSONObject(text) {
 /**
  * Validate a parsed decision against the grammar.
  *
+ * `requiredAnchors` is set for a delegated session: it holds the record ids of the primary
+ * conversation. An approval must cite at least one of them, which is how the gate enforces
+ * that a subagent's task cannot authorize work the user did not ask for. A denial needs no
+ * anchor, so the subordinate layer can always refuse.
+ *
  * @param {object} decision
  * @param {readonly string[]} validAnchors record identifiers that the package holds
+ * @param {readonly string[]} [requiredAnchors] ids that an approval must cite
  * @returns {{ ok: boolean, errors: readonly string[], decision?: NormalisedDecision }}
  */
-export function validateDecision(decision, validAnchors) {
+export function validateDecision(decision, validAnchors, requiredAnchors) {
   const errors = [];
   if (!decision || typeof decision !== "object" || Array.isArray(decision)) {
     return { ok: false, errors: ["not_object"] };
@@ -163,6 +170,13 @@ export function validateDecision(decision, validAnchors) {
 
   const anchorErrors = checkAnchors(shaped.authority_anchors, validAnchors);
   errors.push(...anchorErrors);
+
+  // A delegated session may not approve on its own task text alone.
+  const required = Array.isArray(requiredAnchors) ? requiredAnchors : [];
+  if (required.length > 0 && shaped.outcome === OUTCOME.APPROVE) {
+    const cited = Array.isArray(shaped.authority_anchors) ? shaped.authority_anchors : [];
+    if (!cited.some((anchor) => required.includes(anchor))) errors.push("missing_primary_anchor");
+  }
 
   if (errors.length > 0) return { ok: false, errors };
   return { ok: true, errors: [], decision: normaliseDecision(shaped) };
@@ -382,6 +396,8 @@ function failureMessage(reasonCode, detail) {
       return "NotNativeReviewer's reviewer cited text that is not in the user's request, so it denied this call.";
     case FAILURE_REASON.PACKAGE_UNAVAILABLE:
       return "NotNativeReviewer has no record of the user's request in this session, so it denied this call. Do not retry this call. Ask the user a short clarifying question about what they want done, for example: 'In order to do this, could you specify what you need done?' Ask about the goal, not for permission, and do not ask for an approval, a keyword, or a retry.";
+    case FAILURE_REASON.PRIMARY_UNAVAILABLE:
+      return "NotNativeReviewer could not find the user's conversation behind this delegated session, so it denied this call. Do not retry this call. Tell the user which part you were asked to do, and ask them to restate the overall goal.";
     case FAILURE_REASON.WRITE_UNREAD:
       return "This call changes a file that the conversation has not read. Read it first, then retry.";
     case FAILURE_REASON.WRITE_STALE:

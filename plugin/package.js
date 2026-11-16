@@ -24,6 +24,12 @@ import { byteLength, budgetText, trimToBytes } from "./bytes.js";
 export const TRUST = Object.freeze({
   USER_AUTHORED: "user_authored",
   USER_ASSENTED: "user_assented",
+  /**
+   * The task text that another agent gave this session. It is authority inside the
+   * delegated session, but it is subordinate to the primary conversation and can never
+   * outrank the user (docs/how-it-works.md §5.2).
+   */
+  AGENT_DELEGATED: "agent_delegated",
   SYNTHETIC: "synthetic",
   MODEL_UTTERANCE: "model_utterance",
 });
@@ -102,21 +108,85 @@ export class ReviewerPackageStore {
    * at the newest user input answers, so a package that lost its records does not turn into
    * a denial. `source` names the one that answered, so telemetry can show a fallback.
    *
+   * A delegated session also returns `primary`: the conversation that delegated it, held as
+   * the authoritative layer. `previous` in this store is a fallback for the same session;
+   * `primary` belongs to another, higher session and is never replaced by this one.
+   *
    * @param {{ sessionID: string }} request
-   * @returns {{ items: Array<object>, latestUserID: string | null, metadata: object, source: string }}
+   * @returns {{ items: Array<object>, latestUserID: string | null, metadata: object,
+   *   source: string, delegated: boolean, primary: object | null }}
    */
   selectForReview(request) {
     const state = request && this._sessions.get(request.sessionID);
     if (!state || !state.current) {
-      return { items: [], latestUserID: null, metadata: emptyMetadata(), source: "none" };
+      return { items: [], latestUserID: null, metadata: emptyMetadata(), source: "none", delegated: false, primary: null };
     }
+    const extra = { delegated: Boolean(state.parentID), primary: state.primary || null };
     const current = selectWithAuthority(state.current.records);
-    if (current.authority) return { ...current.result, source: "current" };
+    if (current.authority) return { ...current.result, source: "current", ...extra };
     if (state.previous) {
       const previous = selectWithAuthority(state.previous.records);
-      if (previous.authority) return { ...previous.result, source: "previous" };
+      if (previous.authority) return { ...previous.result, source: "previous", ...extra };
     }
-    return { ...current.result, source: "none" };
+    return { ...current.result, source: "none", ...extra };
+  }
+
+  /**
+   * Record that `childID` was delegated by `parentID`, and capture the primary layer.
+   *
+   * The capture happens once, at delegation time: the child is judged against the user's
+   * intent as it stood when the work was handed over. A nested delegation keeps the deeper
+   * user layer, so a chain of agents still traces back to the user.
+   *
+   * Any prompt text that arrived before the link was known is reclassified as delegated, so
+   * a race in the event order cannot leave agent text holding user authority.
+   *
+   * @param {string} childID
+   * @param {string} parentID
+   * @returns {{ linked: boolean, inherited: boolean }}
+   */
+  linkParent(childID, parentID) {
+    if (!childID || !parentID || childID === parentID) return { linked: false, inherited: false };
+    let state = this._sessions.get(childID);
+    if (!state) {
+      state = { current: null, previous: null, used: 0, parentID: null, primary: null };
+      this._sessions.set(childID, state);
+    }
+    if (state.parentID === parentID) return { linked: false, inherited: Boolean(state.primary) };
+    state.parentID = parentID;
+    state.primary = this._capturePrimary(parentID);
+    reclassifyAsDelegated(state.current);
+    reclassifyAsDelegated(state.previous);
+    this._touch(childID, state);
+    return { linked: true, inherited: Boolean(state.primary) };
+  }
+
+  /** Whether the session was delegated by another session. */
+  isDelegated(sessionID) {
+    const state = this._sessions.get(sessionID);
+    return Boolean(state && state.parentID);
+  }
+
+  /** The primary layer for a delegated session, or null. */
+  primaryFor(sessionID) {
+    const state = this._sessions.get(sessionID);
+    return (state && state.primary) || null;
+  }
+
+  /** Capture the authoritative conversation of the parent session. */
+  _capturePrimary(parentID) {
+    const parent = this._sessions.get(parentID);
+    if (!parent) return null;
+    // A nested delegation inherits the user layer, not the middle agent's task text.
+    if (parent.primary) return cloneSelection(parent.primary);
+    if (!parent.current) return null;
+    const selected = selectWithAuthority(parent.current.records);
+    if (!selected.authority) return null;
+    return {
+      items: selected.result.items.map((item) => ({ ...item })),
+      latestUserID: selected.result.latestUserID,
+      anchors: readValidAnchors(selected.result.items),
+    };
   }
 
   /**
@@ -134,7 +204,14 @@ export class ReviewerPackageStore {
   summarise(sessionID) {
     const state = this._sessions.get(sessionID);
     if (!state || !state.current) {
-      return { records: 0, bytes: 0, trusts: {}, previous: Boolean(state && state.previous) };
+      return {
+        records: 0,
+        bytes: 0,
+        trusts: {},
+        previous: Boolean(state && state.previous),
+        parent: Boolean(state && state.parentID),
+        primary: Boolean(state && state.primary),
+      };
     }
     const trusts = {};
     let bytes = 0;
@@ -142,7 +219,14 @@ export class ReviewerPackageStore {
       trusts[record.trust] = (trusts[record.trust] || 0) + 1;
       bytes += record.bytes;
     }
-    return { records: state.current.records.length, bytes, trusts, previous: Boolean(state.previous) };
+    return {
+      records: state.current.records.length,
+      bytes,
+      trusts,
+      previous: Boolean(state.previous),
+      parent: Boolean(state.parentID),
+      primary: Boolean(state.primary),
+    };
   }
 
   /** Add one user record, and refresh the snapshot a review can fall back to. */
@@ -161,7 +245,9 @@ export class ReviewerPackageStore {
 
     if (!state.current) state.current = newPackage();
 
-    const added = appendRecord(state.current, { ...input, text, trust: TRUST.USER_AUTHORED });
+    // Text from a delegated session is the other agent's task, not the user's instruction.
+    const trust = state.parentID ? TRUST.AGENT_DELEGATED : TRUST.USER_AUTHORED;
+    const added = appendRecord(state.current, { ...input, text, trust });
     if (!added) return { recorded: false, snapshot: false };
     // The snapshot is the package as it stands at this input: it keeps the newest authority
     // and the conversation before it, so a fallback is still a review of real evidence.
@@ -196,6 +282,23 @@ function newPackage() {
  */
 function clonePackage(pkg) {
   return { seq: pkg.seq, records: pkg.records.slice(), seen: new Set(pkg.seen) };
+}
+
+/** Reclassify a package's own prompt records as delegated, when the link arrives late. */
+function reclassifyAsDelegated(pkg) {
+  if (!pkg) return;
+  pkg.records = pkg.records.map((record) =>
+    record.trust === TRUST.USER_AUTHORED ? { ...record, trust: TRUST.AGENT_DELEGATED } : record,
+  );
+}
+
+/** Copy a captured primary selection, so neither session can mutate the other's copy. */
+function cloneSelection(selection) {
+  return {
+    items: selection.items.map((item) => ({ ...item })),
+    latestUserID: selection.latestUserID,
+    anchors: selection.anchors.slice(),
+  };
 }
 
 /** Append one record to a package, in conversation order, and keep it bounded. */

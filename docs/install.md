@@ -87,6 +87,7 @@ The installed directory holds these files:
 | `questions.js` | Question and page answers, appended to the package |
 | `grammar.js` | Decision grammar and failure posture |
 | `reviewer.js` | Reviewer prompt and model call |
+| `payload.js` | Reads the file content a call will write or run |
 | `files.js` | The gate's own file access |
 | `bytes.js` | Byte measurement |
 | `telemetry.js` | The local step log |

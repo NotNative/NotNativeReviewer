@@ -41,7 +41,7 @@ OpenCode or OpenChamber.
 | `session.prompt` | Records a user prompt in the package. |
 | `session.context` | Records agent text in the package as evidence. Agent text is never authority. |
 | `tool.execute.after` | Records the digest a write leaves, and appends a page answer. |
-| event stream | Appends question answers. It observes session lifecycle and forgets nothing. |
+| event stream | Appends question answers, and learns a delegated session's parent. It forgets nothing. |
 
 ### 3.1 Why the gate blocks at `tool.execute.before`
 
@@ -250,6 +250,9 @@ The gate gives the reviewer two bounded inputs:
    - `user_authored`: the user's own words, including a question or page answer. This can
      authorise a call.
    - `user_assented`: agent text that the user approved. This can authorise a call.
+   - `agent_delegated`: the task that another agent gave a delegated session. It can
+     authorise work inside that session, but only within the primary conversation, and it
+     can never outrank the user (§5.4).
    - `model_utterance`, `synthetic`: the agent's proposals and context. This cannot
      authorise a call.
    Tool calls and tool results are not in the package. The reviewer sees what the user saw:
@@ -325,7 +328,7 @@ any other user input; it does not start a new authority window.
 User and agent text stay interleaved on purpose. A short "ok" only means something next to
 the proposal it answers, so the gate never separates the user's lines from the agent's.
 
-### 5.1 The package is created by user input, and only by user input
+### 5.3 The package is created by user input, and only by user input
 
 A package exists because the user spoke. A prompt or a question or page answer creates it.
 Agent text only appends to a package that already exists; a transcript made only of agent
@@ -348,6 +351,35 @@ When neither the package nor its snapshot holds a user record, the gate denies w
 `package_unavailable` and tells the model to ask the user a short clarifying question about
 what they want done. It asks for the goal, not for permission, and it does not invite a
 retry.
+
+### 5.4 A delegated session runs inside the user's intent
+
+A subagent is a separate session, and its task text is written by another agent. That text is
+not the user's instruction, so the gate gives a delegated session two layers:
+
+| Layer | Source | Authority |
+| --- | --- | --- |
+| Primary | The conversation that delegated the session, captured when the link is known | The user's own request. Highest authority |
+| Delegated | The task text in the subagent's session, and that agent's own text | Subordinate. It can carry out the primary conversation, never extend it |
+
+The gate learns the link from `session.created`, which carries the session's `parentID`. If
+that event does not arrive, it asks the host client once, when the session's first prompt
+arrives. A prompt written before the link is known is reclassified as delegated, so an event
+race cannot leave agent text holding user authority.
+
+The reviewer receives both layers, with the policy that the delegated task cannot override
+the primary conversation, and that a conflict is a denial. The gate also enforces the
+hierarchy in the grammar: **an approval from a delegated session must cite at least one
+anchor from the primary conversation.** A decision that cites only the subagent's task is
+rejected, repaired once, and then denied. A denial needs no anchor, so a subagent can always
+refuse.
+
+A nested delegation keeps the deeper user layer, so a chain of agents still traces back to
+the user and not to the agent in the middle.
+
+If a delegated session has no primary conversation, the gate denies with
+`primary_unavailable` and asks the agent to tell the user what it was asked to do, and to
+request the overall goal. It does not review the task on its own authority.
 
 ## 6. Read before write
 
@@ -406,6 +438,8 @@ allows.
 | The output is malformed twice | Deny, `reviewer_output_malformed` |
 | The reviewer cites text the user did not write | Deny, `reviewer_anchor_invalid` |
 | No user record in the package or its snapshot | Deny, `package_unavailable`; the model is told to ask a clarifying question |
+| A delegated session whose parent conversation is unknown | Deny, `primary_unavailable`; the model is told to ask for the overall goal |
+| A delegated approval that cites only the subagent's task | Deny, `reviewer_anchor_invalid` |
 | A modify of a file the session never read | Deny, `write_unread` |
 | A modify where the file changed since the read | Deny, `write_stale` |
 

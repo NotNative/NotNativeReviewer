@@ -13,8 +13,8 @@
  * The module never throws into the host hook: a failure becomes a deny.
  */
 
-import { byteLength, trimToBytes, budgetText } from "./bytes.js";
-import { CLASS, classifyCall, detectCatastrophe, readCommandBase, readScriptPaths, readTargetPaths } from "./floor.js";
+import { byteLength } from "./bytes.js";
+import { CLASS, classifyCall, detectCatastrophe, readTargetPaths } from "./floor.js";
 import {
   FAILURE_REASON,
   OUTCOME,
@@ -26,6 +26,7 @@ import {
 import { readValidAnchors } from "./package.js";
 import { checkWriteInvariant, recordReads } from "./ledger.js";
 import { callKey } from "./dedupe.js";
+import { readPayloadExcerpt, readShellCommand } from "./payload.js";
 import { buildReviewerRequest, callReviewer, REVIEW_DEADLINE_MS } from "./reviewer.js";
 import { STEP } from "./telemetry.js";
 
@@ -135,6 +136,11 @@ async function evaluateCall(input) {
   const projection = await buildProjection(input, event, targetPaths, classification);
   recordProjection(telemetry, sessionID, projection);
 
+  if (projection.primaryUnavailable) {
+    const decision = buildFailureDecision(FAILURE_REASON.PRIMARY_UNAVAILABLE);
+    return applyDeny(event, telemetry, sessionID, decision, FAILURE_REASON.PRIMARY_UNAVAILABLE);
+  }
+
   if (projection.missingPackage) {
     const decision = buildFailureDecision(FAILURE_REASON.PACKAGE_UNAVAILABLE);
     return applyDeny(event, telemetry, sessionID, decision, FAILURE_REASON.PACKAGE_UNAVAILABLE);
@@ -162,6 +168,9 @@ function recordProjection(telemetry, sessionID, projection) {
       promptBytes: projection.request ? byteLength(projection.request.prompt) : 0,
       missingPackage: Boolean(projection.missingPackage),
       packageSource: projection.source || "none",
+      delegated: Boolean(projection.delegated),
+      primaryItems: projection.primaryItems ? projection.primaryItems.length : 0,
+      requiredAnchors: projection.requiredAnchors ? projection.requiredAnchors.length : 0,
     },
   });
   if (projection.source === "previous") telemetry.record(STEP.PACKAGE_FALLBACK, { sessionID, data: { used: "previous" } });
@@ -216,18 +225,42 @@ function applyPosture(input, event, telemetry, sessionID, classification) {
 async function buildProjection(input, event, targetPaths, classification) {
   const sessionID = event.sessionID;
   const selected = input.stores.packages.selectForReview({ sessionID });
-  const validAnchors = readValidAnchors(selected.items);
+  const delegated = Boolean(selected.delegated);
+  const primary = delegated ? selected.primary : null;
+  const primaryAnchors = primary && Array.isArray(primary.anchors) ? primary.anchors : [];
+  const ownAnchors = readValidAnchors(selected.items);
+  const empty = {
+    packageItems: [],
+    latestUserID: null,
+    validAnchors: [],
+    requiredAnchors: [],
+    payloadExcerpt: "",
+    request: null,
+    source: selected.source,
+    delegated,
+  };
 
-  // Without a user record in the selected package there is no authority to judge against.
-  if (selected.items.length === 0 || validAnchors.length === 0) {
-    return { missingPackage: true, packageItems: [], latestUserID: null, validAnchors: [], payloadExcerpt: "", request: null, source: selected.source };
+  if (delegated) {
+    // A delegated session is judged against the user's own conversation. Without it there
+    // is no higher authority to align with, so the gate refuses rather than trust the task.
+    if (!primary || primaryAnchors.length === 0) {
+      return { ...empty, missingPackage: false, primaryUnavailable: true };
+    }
+  } else if (selected.items.length === 0 || ownAnchors.length === 0) {
+    // Without a user record in the selected package there is no authority to judge against.
+    return { ...empty, missingPackage: true, primaryUnavailable: false };
   }
+
+  const validAnchors = [...new Set([...ownAnchors, ...primaryAnchors])];
   const payloadExcerpt = await readPayloadExcerpt(input, event, targetPaths);
 
   const request = buildReviewerRequest({
     packageItems: selected.items,
     latestUserID: selected.latestUserID,
     validAnchors,
+    primaryItems: delegated ? primary.items : [],
+    primaryLatestUserID: delegated ? primary.latestUserID : null,
+    primaryAnchors: delegated ? primaryAnchors : [],
     payloadExcerpt,
     call: event,
     classification,
@@ -235,13 +268,17 @@ async function buildProjection(input, event, targetPaths, classification) {
 
   return {
     missingPackage: false,
+    primaryUnavailable: false,
     packageItems: selected.items,
     latestUserID: selected.latestUserID,
     validAnchors,
+    requiredAnchors: delegated ? primaryAnchors : [],
+    primaryItems: delegated ? primary.items : [],
     payloadExcerpt,
     request,
     packageMetadata: selected.metadata,
     source: selected.source,
+    delegated,
   };
 }
 
@@ -262,115 +299,6 @@ function denyCatastrophe(event, telemetry, sessionID) {
   });
   const decision = buildFailureDecision(FAILURE_REASON.CATASTROPHIC_COMMAND, catastrophe.detail);
   return applyDeny(event, telemetry, sessionID, decision, FAILURE_REASON.CATASTROPHIC_COMMAND);
-}
-
-/**
- * Read the file content for this call, so the reviewer judges content and not a path
- * (§4.1, D-013). The excerpt shrinks before anything else (§6.4).
- *
- * A shell call carries a command, so its first target is the command text and not a file.
- * For that call the gate reads the files that the command names, so that a script is
- * reviewed before it runs (§5.1).
- */
-async function readPayloadExcerpt(input, event, targetPaths) {
-  const payloadBytes = (input.options && input.options.payloadBytes) || 16384;
-  if (targetPaths.length === 0) return "";
-
-  const isShell = isShellAction(event && event.action);
-  const command = String(targetPaths[0]);
-  const base = isShell ? readCommandBase(command) : "";
-  const all = isShell ? readScriptPaths(command) : [targetPaths[0]];
-  // A value that the command uses as its own directory is not a file that it opens.
-  const paths = all.filter((path) => !samePath(path, base));
-  if (paths.length === 0) return isShell ? `command: ${command}` : "";
-
-  const parts = [];
-  for (const path of paths) {
-    const read = await readNamedFile(input, path, base, payloadBytes);
-    if (read.text === "") continue;
-    parts.push(isShell ? `### file: ${read.path}\n${read.text}` : read.text);
-  }
-  if (parts.length === 0) {
-    // The gate could not read the file. Show the command, so the reviewer still sees what
-    // will run rather than an empty section it cannot interpret. Say that the content is
-    // absent, so the reviewer asks rather than assuming the call is unexplained.
-    return isShell ? `command: ${command}\n(file content unavailable: the gate could not read ${paths.join(", ")})` : "";
-  }
-  return budgetText(parts.join("\n\n"), payloadBytes).text;
-}
-
-/** Whether a named path is the command's own directory, compared loosely. */
-function samePath(a, b) {
-  if (!b) return false;
-  const fold = (value) => String(value).replace(/[\\/]+/g, "/").replace(/\/+$/, "").toLowerCase();
-  return fold(a) === fold(b);
-}
-
-/**
- * Read one path that a command names, trying the command's own directory first.
- *
- * `git -C /repo rm src/x.js` names `src/x.js` relative to `/repo`. Reading it relative to
- * the gate's directory would find nothing, and the reviewer would judge a deletion with no
- * sight of what it deletes (§5.1).
- *
- * @returns {{ path: string, text: string }} the path that was read, and its content
- */
-async function readNamedFile(input, path, base, payloadBytes) {
-  for (const candidate of candidatePaths(path, base)) {
-    const text = await readOneFile(input, candidate, payloadBytes);
-    if (text !== "") return { path: candidate, text };
-  }
-  return { path, text: "" };
-}
-
-/** The paths to try for one named file: the command's directory first, then as written. */
-function candidatePaths(path, base) {
-  if (base === "" || isAbsolutePath(path)) return [path];
-  return [joinPath(base, path), path];
-}
-
-/** Whether a path already names its own root. */
-function isAbsolutePath(path) {
-  return path.startsWith("/") || /^[a-z]:[\\/]/i.test(path) || path.startsWith("\\\\");
-}
-
-/** Join a directory and a relative path, using one separator throughout. */
-function joinPath(base, path) {
-  const trimmed = base.replace(/[\\/]+$/, "");
-  const relative = path.replace(/^[\\/]+/, "");
-  const usesBackslash = trimmed.includes("\\") && !trimmed.includes("/");
-  const joined = usesBackslash ? `${trimmed}\\${relative}` : `${trimmed}/${relative}`;
-  // A file name with `/` in it reads the same either way on POSIX. On Windows one separator
-  // avoids a path such as `C:\\repo/src/x.js`.
-  return usesBackslash ? joined.replace(/\//g, "\\") : joined;
-}
-
-/** Whether an action is a shell command. */
-function isShellAction(action) {
-  const name = String(action || "").toLowerCase();
-  return name === "shell" || name === "bash" || name === "sh";
-}
-
-/**
- * The command text of a shell call, or an empty string for another kind of call.
- * The command is the first target that the tool gate recorded.
- */
-function readShellCommand(event) {
-  if (!isShellAction(event && event.action)) return "";
-  const resources = event && event.resources;
-  if (!Array.isArray(resources) || resources.length === 0) return "";
-  return typeof resources[0] === "string" ? resources[0] : "";
-}
-
-/** Read one file as an excerpt, or return an empty string when the gate cannot read it. */
-async function readOneFile(input, path, payloadBytes) {
-  try {
-    const text = await input.readFileText(path);
-    if (typeof text !== "string" || text === "") return "";
-    return byteLength(text) <= payloadBytes ? text : trimToBytes(text, payloadBytes);
-  } catch {
-    return "";
-  }
 }
 
 /** Name the reviewer's model for the audit record. */
@@ -432,7 +360,7 @@ async function askOnce(input, projection, sessionID, isRepair) {
     return { ok: false, reason: FAILURE_REASON.REVIEWER_OUTPUT_MALFORMED, error: parsed.error };
   }
 
-  const validated = validateDecision(parsed.decision, projection.validAnchors);
+  const validated = validateDecision(parsed.decision, projection.validAnchors, projection.requiredAnchors);
   if (!validated.ok) {
     telemetry.record(STEP.DECISION_VALIDATED, { sessionID, ok: false, data: { errors: validated.errors.length, error: validated.errors[0] } });
     return { ok: false, reason: failureReasonForValidation(validated.errors), error: validated.errors[0] };

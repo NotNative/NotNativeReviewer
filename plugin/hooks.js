@@ -109,6 +109,9 @@ export function registerPrompt(ctx, deps) {
     if (!sessionID || !prompt) return undefined;
     const messageID = prompt.messageID || prompt.id || digest(String(prompt.text || ""));
     const at = prompt.time && Number.isFinite(prompt.time.created) ? prompt.time.created : Date.now();
+    // A prompt may arrive before the host reports the session's parent, so resolve it once,
+    // before the first record is written.
+    await ensureDelegation(ctx, deps, sessionID);
     const admitted = deps.stores.packages.recordUserInput({
       sessionID,
       id: messageID,
@@ -143,6 +146,49 @@ export function registerPrompt(ctx, deps) {
     return undefined;
   });
   return true;
+}
+
+/**
+ * Learn whether this session was delegated, before its first prompt is recorded.
+ *
+ * The event stream is the primary source (`session.created` carries `parentID`). This is the
+ * fallback for a host that does not deliver that event to plugins: one client lookup per new
+ * session, and none afterwards. A failed lookup leaves the session top-level, which is the
+ * behaviour of a session the user opened directly.
+ *
+ * @param {object} ctx the host context
+ * @param {object} deps the gate dependencies
+ * @param {string} sessionID
+ */
+async function ensureDelegation(ctx, deps, sessionID) {
+  const packages = deps.stores && deps.stores.packages;
+  if (!packages || typeof packages.linkParent !== "function") return;
+  if (typeof packages.isDelegated === "function" && packages.isDelegated(sessionID)) return;
+  // Only a session with no records yet can be a fresh child, so this runs once per session.
+  if (packages.summarise(sessionID).records > 0) return;
+  const parentID = await readParentID(ctx, sessionID);
+  if (!parentID) return;
+  const result = packages.linkParent(sessionID, parentID);
+  if (result.linked) {
+    deps.telemetry.record(STEP.DELEGATION_OBSERVED, {
+      sessionID,
+      data: { inherited: result.inherited, via: "client" },
+    });
+  }
+}
+
+/** Read a session's parent id from the host client, or null. */
+async function readParentID(ctx, sessionID) {
+  try {
+    const client = ctx && ctx.client;
+    if (!client || !client.session || typeof client.session.get !== "function") return null;
+    const reply = await client.session.get({ path: { id: sessionID } });
+    const info = reply && (reply.data || reply);
+    const parentID = info && info.parentID;
+    return typeof parentID === "string" && parentID !== "" ? parentID : null;
+  } catch {
+    return null;
+  }
 }
 
 /**
@@ -387,7 +433,18 @@ export function registerEvents(ctx, deps) {
   if (!ctx.event || typeof ctx.event.subscribe !== "function") return false;
   try {
     ctx.event.subscribe(
-      { types: ["session.end", "session.deleted", "session.idle", "session.status", "question.replied", "question.v2.replied"] },
+      {
+        types: [
+          "session.created",
+          "session.updated",
+          "session.end",
+          "session.deleted",
+          "session.idle",
+          "session.status",
+          "question.replied",
+          "question.v2.replied",
+        ],
+      },
       (event) => {
         // A question answer is user authority, not a lifecycle event. Append it and stop.
         if (event && typeof event.type === "string" && event.type.startsWith("question.")) {
@@ -395,6 +452,19 @@ export function registerEvents(ctx, deps) {
             recordQuestionReply(deps, event);
           } catch {
             // A malformed answer must not break the event stream.
+          }
+          return;
+        }
+        // A created or updated session names its parent. That link is the only evidence
+        // that this session is a delegate rather than a session the user opened.
+        const info = event && event.properties && event.properties.info;
+        if (info && typeof info.id === "string" && typeof info.parentID === "string" && info.parentID !== "") {
+          const linked = deps.stores.packages.linkParent(info.id, info.parentID);
+          if (linked.linked) {
+            deps.telemetry.record(STEP.DELEGATION_OBSERVED, {
+              sessionID: info.id,
+              data: { inherited: linked.inherited, via: "event" },
+            });
           }
           return;
         }

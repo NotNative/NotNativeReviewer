@@ -62,6 +62,7 @@ export function registerEvaluate(ctx, deps) {
         readFileDigest: (path) => deps.fileLayer.digest(path),
         readFileText: (path) => deps.fileLayer.readText(path),
         options: deps.options,
+        model: readSessionModel(deps, event && event.sessionID),
       });
     } catch (error) {
       // runEvaluation fails closed, but a defect in this module must not leak an allow.
@@ -146,6 +147,9 @@ export function registerContext(ctx, deps) {
     const sessionID = event && event.sessionID;
     const messages = event && event.messages;
     if (!sessionID || !Array.isArray(messages)) return undefined;
+    // The context event names the model that this request uses (D-019). The reviewer
+    // must name the same model, or a host with no default model cannot answer.
+    rememberSessionModel(deps, sessionID, event.model);
     let recorded = 0;
     for (const message of messages) {
       if (!message || message.role !== "assistant") continue;
@@ -162,6 +166,31 @@ export function registerContext(ctx, deps) {
     return undefined;
   });
   return true;
+}
+
+/**
+ * Remember the model that this session is using (D-019).
+ *
+ * The host carries a ModelRef: `providerID`, `id`, and an optional `variant`. Keep only
+ * those fields, so a larger event object does not reach the transport.
+ */
+function rememberSessionModel(deps, sessionID, model) {
+  if (!sessionID || !model || typeof model !== "object") return;
+  const models = deps.stores && deps.stores.models;
+  if (!models || typeof models.set !== "function") return;
+  const providerID = model.providerID;
+  const id = model.id || model.modelID;
+  if (!providerID || !id) return;
+  const remembered = { providerID, id };
+  if (model.variant) remembered.variant = model.variant;
+  models.set(sessionID, remembered);
+}
+
+/** The model that this session was last seen using, or undefined. */
+function readSessionModel(deps, sessionID) {
+  const models = deps.stores && deps.stores.models;
+  if (!models || typeof models.get !== "function" || !sessionID) return undefined;
+  return models.get(sessionID);
 }
 
 /** Read assistant text from a message, without holding parts that are not text. */
@@ -203,6 +232,7 @@ export function registerToolBefore(ctx, deps) {
         readFileDigest: (path) => deps.fileLayer.digest(path),
         readFileText: (path) => deps.fileLayer.readText(path),
         options: deps.options,
+        model: readSessionModel(deps, sessionID),
       });
     } catch {
       throw new Error("NotNativeReviewer could not review this call, so it denied it.");

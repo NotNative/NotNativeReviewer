@@ -177,7 +177,9 @@ function mergeOptions(fromFile, fromCaller) {
  */
 export const setup = async (ctx, options = {}) => {
   const telemetry = new Telemetry({ write: defaultSink() });
-  const stores = { packages: new ReviewerPackageStore(), observations: new ObservationStore() };
+  // `models` holds the model that each session is using, captured from the context hook
+  // (D-019), so the reviewer call names the same model.
+  const stores = { packages: new ReviewerPackageStore(), observations: new ObservationStore(), models: new Map() };
   // A caller may pass a file layer, so a test can supply known file content.
   const fileLayer = options.fsProvider ? buildFileLayer({ fsProvider: options.fsProvider }) : buildFileLayer();
   const postures = readPostures();

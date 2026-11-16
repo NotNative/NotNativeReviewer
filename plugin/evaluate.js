@@ -367,6 +367,15 @@ async function readOneFile(input, path, payloadBytes) {
   }
 }
 
+/** Name the reviewer's model for the audit record. */
+function readModelIdentity(model) {
+  if (!model || typeof model !== "object") return "host_default";
+  const provider = String(model.providerID || "");
+  const id = String(model.id || model.modelID || "");
+  if (!provider && !id) return "host_default";
+  return `${provider}/${id}`;
+}
+
 /**
  * Ask the reviewer. On a grammar failure, ask once more with the valid anchor list
  * (§7). The repair never patches a decision locally.
@@ -393,12 +402,16 @@ async function reviewWithRepair(input, projection, sessionID) {
 /** One reviewer call, then parse and validate. */
 async function askOnce(input, projection, sessionID, isRepair) {
   const { telemetry, ctx } = input;
-  telemetry.record(STEP.REVIEWER_CALLED, { sessionID, data: { repair: isRepair, deadlineMs: REVIEW_DEADLINE_MS } });
+  const model = (input.options && input.options.model) || input.model;
+  telemetry.record(STEP.REVIEWER_CALLED, {
+    sessionID,
+    data: { repair: isRepair, deadlineMs: REVIEW_DEADLINE_MS, model: readModelIdentity(model) },
+  });
 
   const reply = await callReviewer(ctx, projection.request, {
     deadlineMs: (input.options && input.options.deadlineMs) || REVIEW_DEADLINE_MS,
     sessionID,
-    model: input.options && input.options.model,
+    model,
     onStep: (step, data) => telemetry.record(STEP.REVIEWER_ANSWERED, { sessionID, data: { sub: step, ...data } }),
   });
 

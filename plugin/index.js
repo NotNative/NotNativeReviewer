@@ -10,9 +10,9 @@
  * The gate registers five hooks (docs/how-it-works.md §3):
  *
  *   ctx.permission.hook("evaluate")     the enforcement point (D-018)
- *   ctx.session.hook("prompt")          review epoch boundary (D-021, D-022)
- *   ctx.session.hook("context")         observation lane
- *   ctx.event.subscribe                 turn end, tool observations
+ *   ctx.session.hook("prompt")          records user input in the package
+ *   ctx.session.hook("context")         records agent text in the package
+ *   ctx.event.subscribe                 question answers, session cleanup
  *   ctx.tool.hook("execute.after")      the result digest for read-before-write
  *
  * Telemetry is local and carries no content (docs/coding-discipline.md §4).

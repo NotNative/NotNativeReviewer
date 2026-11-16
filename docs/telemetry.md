@@ -55,9 +55,8 @@ The step list is closed. A step outside the list is a defect and is recorded as
 | --- | --- |
 | `setup` | The plugin's setup ran |
 | `hook.registered` | One hook registration, with `registered` true or false |
-| `prompt.admitted` | The prompt hook admitted a user input |
-| `epoch.started` | A new review epoch started |
-| `package.locked` | The request record was built and locked |
+| `prompt.admitted` | The prompt hook recorded a user input |
+| `package.updated` | A user input was appended to the package |
 | `context.observed` | The context hook saw the message list |
 | `event.observed` | The event stream delivered an event |
 | `evaluate.start` | A permission evaluation began |
@@ -71,7 +70,6 @@ The step list is closed. A step outside the list is a defect and is recorded as
 | `evaluate.end` | The evaluation finished |
 | `fail.closed` | A failure path denied the call |
 | `ledger.append` | A read-before-write check was recorded |
-| `turn.ended` | The gate inferred a turn end |
 | `ungoverned` | A degradation, or a step outside the list |
 
 ## 4. Reading a chain
@@ -126,9 +124,10 @@ decision.applied        outcome=joined reason=duplicate_call
 evaluate.end            reason=duplicate_call
 ```
 
-`projection.built` records `hasCurrent`, which says whether the prompt carried an
-instruction in force. A `false` there means the reviewer had no newest user input to judge
-against, which happens only when the session holds no user-authored record.
+`projection.built` records `hasLatestUser`, which says whether the selected package carried
+a user record. A `false` there means the reviewer had no user input to judge against, which
+happens only when the session holds no user-authored record; the gate then denies without a
+reviewer call.
 
 A denial that came from the catastrophe check has no reviewer records, because no model
 was asked:

@@ -12,7 +12,7 @@ import { digest, STEP } from "./telemetry.js";
 import { runEvaluation } from "./evaluate.js";
 import { recordWriteDigest } from "./ledger.js";
 import { TRUST } from "./package.js";
-import { summariseToolResult } from "./observation.js";
+import { recordQuestionReply, recordRenderAnswer } from "./questions.js";
 
 /**
  * Register every hook that the host provides, and record each result.
@@ -95,9 +95,8 @@ function applyToEvent(event, result) {
 }
 
 /**
- * Register the prompt hook. Every admitted user input starts a new review epoch
- * (§5.1.3, D-022). The hook records; it does not reject, because the host gives the
- * prompt hook no rejection API.
+ * Register the prompt hook. Every user input joins the package. The hook records; it does
+ * not reject, because the host gives the prompt hook no rejection API.
  */
 export function registerPrompt(ctx, deps) {
   if (!ctx.session || typeof ctx.session.hook !== "function") return false;
@@ -106,11 +105,12 @@ export function registerPrompt(ctx, deps) {
     const sessionID = event && event.sessionID;
     if (!sessionID || !prompt) return undefined;
     const messageID = prompt.messageID || prompt.id || digest(String(prompt.text || ""));
-    const result = deps.stores.packages.admitPrompt({
+    const at = prompt.time && Number.isFinite(prompt.time.created) ? prompt.time.created : Date.now();
+    const recorded = deps.stores.packages.recordUserInput({
       sessionID,
-      messageID,
+      id: messageID,
       text: String(prompt.text || ""),
-      delivery: prompt.delivery,
+      at,
     });
     deps.telemetry.record(STEP.PROMPT_ADMITTED, {
       sessionID,
@@ -119,15 +119,14 @@ export function registerPrompt(ctx, deps) {
         textBytes: typeof prompt.text === "string" ? prompt.text.length : 0,
         files: Array.isArray(prompt.files) ? prompt.files.length : 0,
         messageDigest: messageID ? digest(messageID) : null,
-        newEpoch: result.replaced,
-        epoch: result.epoch,
+        recorded,
+        ...deps.stores.packages.summarise(sessionID),
       },
     });
-    if (result.replaced) {
-      deps.telemetry.record(STEP.EPOCH_STARTED, { sessionID, data: { epoch: result.epoch } });
-      deps.telemetry.record(STEP.PACKAGE_LOCKED, {
+    if (recorded) {
+      deps.telemetry.record(STEP.PACKAGE_UPDATED, {
         sessionID,
-        data: { epoch: result.epoch, ...deps.stores.packages.summarise(sessionID) },
+        data: { source: "prompt", ...deps.stores.packages.summarise(sessionID) },
       });
     }
     return undefined;
@@ -138,8 +137,7 @@ export function registerPrompt(ctx, deps) {
 /**
  * Register the context hook. The hook runs before each agent-loop model request. The
  * gate records agent text as `model_utterance`, which is evidence and never authority
- * (§2.1, §5.2). It does not add current-turn text to the package, because the package
- * is locked at admission.
+ * (§2.1, §5.2). The message's own time keeps the transcript in conversation order.
  */
 export function registerContext(ctx, deps) {
   if (!ctx.session || typeof ctx.session.hook !== "function") return false;
@@ -157,7 +155,8 @@ export function registerContext(ctx, deps) {
       if (!messageID) continue;
       const text = readMessageText(message);
       if (!text) continue;
-      if (deps.stores.packages.recordText({ sessionID, messageID, text, trust: TRUST.MODEL_UTTERANCE })) recorded += 1;
+      const at = message.time && Number.isFinite(message.time.created) ? message.time.created : Date.now();
+      if (deps.stores.packages.recordText({ sessionID, id: messageID, text, trust: TRUST.MODEL_UTTERANCE, at })) recorded += 1;
     }
     deps.telemetry.record(STEP.CONTEXT_OBSERVED, {
       sessionID,
@@ -294,12 +293,12 @@ function readResources(input, tool) {
 }
 
 /**
- * Register the tool result hook. The gate keeps the digest of the tool result and a
- * short summary for the observation lane. It never keeps the full result.
+ * Register the tool result hook. The gate records the digest of a file that a write left
+ * on disk, and appends a render-page answer to the package. It does not keep the tool
+ * result: tool calls and results are not part of the conversation the reviewer reads.
  *
  * The host sends the call's arguments as `input` and an empty `resources`, so the target
- * comes from the same reader that the gate uses before the call. Without that the lane
- * says "on (no target)" and its relevance filter can never match a path.
+ * comes from the same reader that the gate uses before the call.
  */
 export function registerToolAfter(ctx, deps) {
   if (!ctx.tool || typeof ctx.tool.hook !== "function") return false;
@@ -310,21 +309,20 @@ export function registerToolAfter(ctx, deps) {
     const input = event.input && typeof event.input === "object" ? event.input : {};
     const named = readResources(input, tool.toLowerCase());
     const targetPaths = named.named ? named.resources : [];
-    const resultBytes = byteLengthOfJSON(event.result);
-    const text = summariseToolResult({ tool, targetPaths, resultBytes, ok: event.status !== "error" });
-    deps.stores.observations.recordObservation({
-      sessionID,
-      id: event.id || event.callID || digest(tool + targetPaths.join(",")),
-      text,
-      targetPaths,
-    });
     deps.telemetry.record(STEP.EVENT_OBSERVED, {
       sessionID,
-      data: { tool, targetPaths: targetPaths.length, resultBytes },
+      data: { tool, targetPaths: targetPaths.length },
     });
     // A call that changed a file just left known content on disk. Recording it here is
     // what lets the agent edit the same file again without reading it first (§6).
     recordChangedFile(deps, event, tool, targetPaths);
+    // A render page that waited for an answer carries the user's choice. Append it to the
+    // package, so the reviewer can treat it as authority for the calls that follow.
+    try {
+      recordRenderAnswer(deps, event);
+    } catch {
+      // A malformed tool result must not break the tool result hook.
+    }
     return undefined;
   });
   return true;
@@ -360,40 +358,46 @@ function isFileWriting(tool) {
 }
 
 /**
- * Register the event stream. The gate infers turn end from the event stream, because
- * the host provides no turn-end hook (§5.4, Q11). At turn end the package is released.
+ * Register the event stream. Question answers join the package. A session end forgets
+ * that session, so a long-lived host does not keep every session forever.
  */
 export function registerEvents(ctx, deps) {
   if (!ctx.event || typeof ctx.event.subscribe !== "function") return false;
   try {
-    ctx.event.subscribe({ types: ["session.idle", "session.status", "session.end"] }, (event) => {
-      const sessionID = event && (event.sessionID || (event.properties && event.properties.sessionID));
-      if (!sessionID) return;
-      if (isTurnEnd(event)) {
-        deps.stores.packages.release(sessionID);
-        deps.telemetry.record(STEP.TURN_ENDED, { sessionID, data: { eventType: event.type } });
-      } else {
+    ctx.event.subscribe(
+      { types: ["session.end", "session.deleted", "session.idle", "session.status", "question.replied", "question.v2.replied"] },
+      (event) => {
+        // A question answer is user authority, not a lifecycle event. Append it and stop.
+        if (event && typeof event.type === "string" && event.type.startsWith("question.")) {
+          try {
+            recordQuestionReply(deps, event);
+          } catch {
+            // A malformed answer must not break the event stream.
+          }
+          return;
+        }
+        const sessionID = event && (event.sessionID || (event.properties && event.properties.sessionID));
+        if (!sessionID) return;
+        if (isSessionEnd(event)) {
+          deps.stores.packages.forget(sessionID);
+          if (deps.stores.observations && typeof deps.stores.observations.forget === "function") {
+            deps.stores.observations.forget(sessionID);
+          }
+          if (deps.stores.models && typeof deps.stores.models.delete === "function") deps.stores.models.delete(sessionID);
+          deps.telemetry.record(STEP.EVENT_OBSERVED, { sessionID, data: { eventType: event.type, forgotten: true } });
+          return;
+        }
         deps.telemetry.record(STEP.EVENT_OBSERVED, { sessionID, data: { eventType: event.type } });
-      }
-    });
+      },
+    );
   } catch {
     return false;
   }
   return true;
 }
 
-/** Whether an event marks the end of a turn. */
-function isTurnEnd(event) {
+/** Whether an event marks the end of a session. */
+function isSessionEnd(event) {
   const type = String((event && event.type) || "");
-  return type === "session.idle" || type === "session.end";
-}
-
-/** The byte length of the JSON form of a value, without keeping the value. */
-function byteLengthOfJSON(value) {
-  if (value === undefined || value === null) return 0;
-  try {
-    return JSON.stringify(value).length;
-  } catch {
-    return 0;
-  }
+  return type === "session.end" || type === "session.deleted";
 }

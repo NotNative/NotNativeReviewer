@@ -280,8 +280,8 @@ function normaliseReasonCode(value) {
 
 /**
  * Anchors must name records of class user_authored or user_assented that are present in
- * the locked package (§7). An anchor that names another class, or a record not in the
- * package, is invalid.
+ * the selected conversation (§7). An anchor that names another class, or a record not in
+ * the package, is invalid.
  */
 function checkAnchors(anchors, validAnchors) {
   if (anchors === undefined || anchors === null) return [];

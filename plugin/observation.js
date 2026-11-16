@@ -1,26 +1,15 @@
 /**
- * Observation lane — the gate's own record of what happened in a session.
+ * Read record — the gate's own record of the file content a session has seen.
  *
- * Two jobs:
- *   1. The read record for the read-before-write invariant
- *      (docs/how-it-works.md §6).
- *   2. The observation lane text for the reviewer: tool observations, classed
- *      `untrusted_tool`, which carry evidence and never authority (§6).
+ * The read record holds a content digest per canonical path for the read-before-write
+ * invariant (docs/how-it-works.md §6). The gate computes the digest at read time, and
+ * again at write time, and compares them (§3.1).
  *
- * The read record holds a content digest per canonical path. The gate computes the
- * digest at read time, and again at write time, and compares them (§3.1).
+ * Tool calls and results are not kept here. They are not part of the conversation the
+ * reviewer reads.
  *
- * Imports only `bytes.js`, a sibling module.
+ * No imports.
  */
-
-import { byteLength, trimToBytes } from "./bytes.js";
-
-/** Caps for the observation lane (§6.3). */
-export const LANE_CAP = Object.freeze({
-  ITEMS: 10,
-  PER_ITEM_BYTES: 2048,
-  TOTAL_BYTES: 12288,
-});
 
 /** The result of a read-before-write check. */
 export const WRITE_VERDICT = Object.freeze({
@@ -35,12 +24,12 @@ export const WRITE_VERDICT = Object.freeze({
 });
 
 /**
- * Holds the observation state for one session.
+ * Holds the read record for one session.
  * One instance per session; the gate keeps a map keyed by sessionID.
  */
 export class ObservationStore {
   constructor() {
-    /** @type {Map<string, { reads: Map<string, object>, observations: object[] }>} */
+    /** @type {Map<string, { reads: Map<string, object> }>} */
     this._sessions = new Map();
   }
 
@@ -116,81 +105,26 @@ export class ObservationStore {
     return { verdict: WRITE_VERDICT.MATCH };
   }
 
-  /**
-   * Record a tool observation for the observation lane.
-   * The text is a short summary that the gate builds; it never holds the whole output.
-   *
-   * @param {{ sessionID: string, id: string, text: string, targetPaths?: readonly string[] }} input
-   */
-  recordObservation(input) {
-    const state = this._state(input.sessionID);
-    state.observations.push({
-      id: String(input.id),
-      text: typeof input.text === "string" ? input.text : "",
-      targetPaths: input.targetPaths || [],
-      at: new Date().toISOString(),
-    });
-    if (state.observations.length > 64) state.observations.shift();
-  }
-
-  /**
-   * Select observations that relate to the requested targets (§6.2).
-   * Each selected item gets a fair share of the per-item cap, so one large item cannot
-   * push the other items out.
-   *
-   * @param {{ sessionID: string, targetPaths?: readonly string[] }} request
-   * @returns {{ items: Array<{id: string, text: string}>, metadata: object }}
-   */
-  selectObservations(request) {
-    const state = this._sessions.get(request.sessionID);
-    if (!state) return { items: [], metadata: { total: 0, selected: 0 } };
-    const targets = request.targetPaths || [];
-    const relevant = state.observations.filter((o) => targets.some((t) => o.text.includes(t) || o.targetPaths.includes(t)));
-    const chosen = (relevant.length > 0 ? relevant : state.observations).slice(-LANE_CAP.ITEMS);
-    const items = [];
-    let totalBytes = 0;
-    for (const observation of chosen) {
-      const budget = Math.min(LANE_CAP.PER_ITEM_BYTES, Math.max(LANE_CAP.TOTAL_BYTES - totalBytes, 0));
-      if (budget <= 0) break;
-      const text = trimToBytes(observation.text, budget);
-      totalBytes += byteLength(text);
-      items.push({ id: observation.id, text });
-    }
-    return {
-      items,
-      metadata: { total: state.observations.length, selected: items.length, bytes: totalBytes },
-    };
+  /** Forget a session when the host says it ended. */
+  forget(sessionID) {
+    return this._sessions.delete(sessionID);
   }
 
   /** Counts only, for telemetry. */
   summarise(sessionID) {
     const state = this._sessions.get(sessionID);
-    if (!state) return { reads: 0, observations: 0 };
-    return { reads: state.reads.size, observations: state.observations.length };
+    if (!state) return { reads: 0 };
+    return { reads: state.reads.size };
   }
 
   _state(sessionID) {
     let state = this._sessions.get(sessionID);
     if (!state) {
-      state = { reads: new Map(), observations: [] };
+      state = { reads: new Map() };
       this._sessions.set(sessionID, state);
     }
     return state;
   }
-}
-
-/**
- * Build a short observation text from a tool result.
- * The gate does not keep tool output in full: the summary names the target and the
- * result size, so the reviewer knows the tool ran without carrying the payload.
- *
- * @param {{ tool: string, targetPaths?: readonly string[], resultBytes?: number, ok?: boolean }} input
- */
-export function summariseToolResult(input) {
-  const targets = input.targetPaths && input.targetPaths.length > 0 ? input.targetPaths.join(", ") : "(no target)";
-  const state = input.ok === false ? "failed" : "succeeded";
-  const size = typeof input.resultBytes === "number" ? `, ${input.resultBytes} bytes of result` : "";
-  return `${input.tool} ${state} on ${targets}${size}.`;
 }
 
 

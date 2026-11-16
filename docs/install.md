@@ -82,8 +82,9 @@ The installed directory holds these files:
 | `hooks.js` | Registration for each host hook |
 | `evaluate.js` | The enforcement sequence |
 | `floor.js` | Deterministic classification |
-| `package.js` | Reviewer package and review epoch |
-| `observation.js` | Read record and observation lane |
+| `package.js` | Reviewer package: the conversation text |
+| `observation.js` | Read record for read-before-write |
+| `questions.js` | Question and page answers, appended to the package |
 | `grammar.js` | Decision grammar and failure posture |
 | `reviewer.js` | Reviewer prompt and model call |
 | `files.js` | The gate's own file access |

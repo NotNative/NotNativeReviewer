@@ -39,7 +39,7 @@ import { STEP } from "./telemetry.js";
  *
  * @param {{
  *   event: object,
- *   stores: { packages: object, observations: object },
+ *   stores: { packages: object, observations: object, models?: object },
  *   telemetry: object,
  *   ctx: object,
  *   seen?: { claim: (key: string) => boolean, remember: (key: string) => void },
@@ -137,9 +137,8 @@ async function evaluateCall(input) {
     sessionID,
     data: {
       packageItems: projection.packageItems.length,
-      observationItems: projection.observationItems.length,
       validAnchors: projection.validAnchors.length,
-      hasCurrent: Boolean(projection.current),
+      hasLatestUser: Boolean(projection.latestUserID),
       payloadExcerptBytes: byteLength(projection.payloadExcerpt || ""),
       // `request` is null when the package is missing, so guard the read.
       promptBytes: projection.request ? byteLength(projection.request.prompt) : 0,
@@ -202,26 +201,26 @@ function applyPosture(input, event, telemetry, sessionID, classification) {
 }
 
 /**
- * Build the projection: selected package records, the observation lane, the payload
- * excerpt, and the reviewer request.
+ * Build the projection: the conversation, the payload excerpt, and the reviewer request.
+ *
+ * Tool calls and tool results are not part of the package. The reviewer sees what the user
+ * saw: the conversation, and the call it is judging.
  */
 async function buildProjection(input, event, targetPaths, classification) {
   const sessionID = event.sessionID;
-  const selected = input.stores.packages.selectForReview({ sessionID, targetPaths });
-
-  if (selected.items.length === 0 || !selected.metadata.locked) {
-    return { missingPackage: true, packageItems: [], observationItems: [], validAnchors: [], payloadExcerpt: "", request: null };
-  }
-
+  const selected = input.stores.packages.selectForReview({ sessionID });
   const validAnchors = readValidAnchors(selected.items);
-  const lane = input.stores.observations.selectObservations({ sessionID, targetPaths });
+
+  // Without a user record in the selected package there is no authority to judge against.
+  if (selected.items.length === 0 || validAnchors.length === 0) {
+    return { missingPackage: true, packageItems: [], latestUserID: null, validAnchors: [], payloadExcerpt: "", request: null };
+  }
   const payloadExcerpt = await readPayloadExcerpt(input, event, targetPaths);
 
   const request = buildReviewerRequest({
     packageItems: selected.items,
-    current: selected.current,
+    latestUserID: selected.latestUserID,
     validAnchors,
-    observationItems: lane.items,
     payloadExcerpt,
     call: event,
     classification,
@@ -230,8 +229,7 @@ async function buildProjection(input, event, targetPaths, classification) {
   return {
     missingPackage: false,
     packageItems: selected.items,
-    current: selected.current,
-    observationItems: lane.items,
+    latestUserID: selected.latestUserID,
     validAnchors,
     payloadExcerpt,
     request,

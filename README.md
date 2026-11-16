@@ -54,9 +54,10 @@ The gate has three layers:
    destroys a system root.
 2. **A reviewer.** The gate asks the conversation's own model — not a second model — to
    judge the call against the user's request. The reviewer is a separate agent with its own
-   prompt and a fresh context. It cannot call tools, it cannot read files, and it never sees
-   the conversation that persuaded the agent. The gate reads files on its behalf and hands
-   over the content.
+   prompt and a fresh context. It cannot call tools, it cannot read files, and it does not
+   see tool results or the agent's hidden reasoning. It reads the conversation text, where
+   user records are authority and agent records are evidence. The gate reads file content on
+   its behalf and hands it over when a call writes or runs it.
 3. **A closed outcome set.** The reviewer returns one of four outcomes: `approve`,
    `deny_with_guidance`, `hard_deny`, or `escalate_to_operator`. Anything else is a
    malformed answer, and a malformed answer denies.

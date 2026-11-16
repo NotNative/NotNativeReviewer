@@ -35,9 +35,7 @@ export const STEP = Object.freeze({
   SETUP: "setup",
   HOOK_REGISTERED: "hook.registered",
   PROMPT_ADMITTED: "prompt.admitted",
-  EPOCH_STARTED: "epoch.started",
-  PACKAGE_LOCKED: "package.locked",
-  PACKAGE_TRUNCATED: "package.truncated",
+  PACKAGE_UPDATED: "package.updated",
   CONTEXT_OBSERVED: "context.observed",
   EVENT_OBSERVED: "event.observed",
   EVALUATE_START: "evaluate.start",
@@ -51,7 +49,6 @@ export const STEP = Object.freeze({
   EVALUATE_END: "evaluate.end",
   FAIL_CLOSED: "fail.closed",
   LEDGER_APPEND: "ledger.append",
-  TURN_ENDED: "turn.ended",
   UNGOVERNED: "ungoverned",
 });
 

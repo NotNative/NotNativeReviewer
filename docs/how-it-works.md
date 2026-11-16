@@ -38,10 +38,10 @@ OpenCode or OpenChamber.
 | --- | --- |
 | `tool.execute.before` | **The enforcement point.** Runs before a tool executes. A throw stops the call. |
 | `permission.evaluate` | A second, narrower point. The host runs it only for a call that reaches the permission assert path. |
-| `session.prompt` | Records an admitted user input, and starts a new review epoch. |
-| `session.context` | Records agent text as evidence. Agent text is never authority. |
-| `tool.execute.after` | Records a short summary of a tool result for the observation lane. |
-| event stream | Infers a turn end, because the host provides no turn-end hook. |
+| `session.prompt` | Records a user prompt in the package. |
+| `session.context` | Records agent text in the package as evidence. Agent text is never authority. |
+| `tool.execute.after` | Records the digest a write leaves, and appends a page answer. |
+| event stream | Appends question answers, and forgets a session when it ends. |
 
 ### 3.1 Why the gate blocks at `tool.execute.before`
 
@@ -128,14 +128,14 @@ latency; a measured session showed 2.19 evaluations per tool result.
 The reviewer is an agent that NotNativeReviewer defines:
 
 - its own prompt, written for this one question;
-- a fresh context, which holds the user's request, the evidence, and the call;
+- a fresh context, which holds the conversation text and the call;
 - a closed output grammar;
 - no tools, so it cannot act and cannot read on its own.
 
 Its **model** comes from the conversation. That is deliberate: an operator with one local
 model must be able to use the gate. The separation is not the model. The separation is the
-fresh prompt and the fresh context, which do not contain the reasoning that persuaded the
-agent.
+fresh prompt and the trust labels: user text is authority, agent text is evidence, and the
+reviewer does not see tool results or the agent's hidden reasoning.
 
 #### 4.2.1 The reviewer approves ordinary work
 
@@ -241,20 +241,22 @@ this check.
 
 ## 5. What the reviewer is given
 
-The gate gives the reviewer three bounded inputs:
+The gate gives the reviewer two bounded inputs:
 
-1. **The user's request.** The newest user input, marked as the instruction in force, plus
-   the text of up to 8 preceding turns as history (§5.5). Records carry a trust class:
-   - `user_authored`: the user's own words. This can authorise a call.
+1. **The conversation.** The user's inputs and the agent's replies, in order. User records
+   are authority; agent records are evidence. Records carry a trust class:
+   - `user_authored`: the user's own words, including a question or page answer. This can
+     authorise a call.
    - `user_assented`: agent text that the user approved. This can authorise a call.
-   - `model_utterance`, `synthetic`: context only. This cannot authorise a call.
-   - `untrusted_tool`: a tool result. This connects targets and never authorises a call.
-2. **The observation lane.** Short summaries of what tools did, selected for their
-   relevance to the call's target.
-3. **The file content.** When a call changes a file, the gate reads the file and puts its
-   content in front of the reviewer. The reviewer judges content, not a path string. This
-   matters most for a shell call that runs a script: the gate reads the script, so the
-   reviewer sees what the script will do.
+   - `model_utterance`, `synthetic`: the agent's proposals and context. This cannot
+     authorise a call.
+   Tool calls and tool results are not in the package. The reviewer sees what the user saw:
+   the conversation, not the plumbing.
+2. **The file content for the call.** When a call writes a file or runs a script, the gate
+   reads the content and puts it in front of the reviewer. The reviewer judges content, not
+   a path string. This matters most for a shell call that runs a script: the gate reads the
+   script, so the reviewer sees what it will do, including a network call the user did not
+   ask for.
 
 ### 5.1 How a shell call is presented
 
@@ -293,41 +295,33 @@ This is a reader, not a shell parser. It does not expand a variable, follow a pi
 resolve a path built at run time. A script named through a variable is not read. The gate
 reports what it read, and the reviewer judges from that.
 
-The caps are 32 records with 4,096 bytes each for the request, and 16,384 bytes in total.
-The observation lane holds 10 items with 2,048 bytes each. The reviewer sees 16,384 bytes of
-file content at most, shared across the script files it reads.
+The caps are 32 records with 4,096 bytes each for the conversation, and 16,384 bytes in
+total. The reviewer sees 16,384 bytes of file content at most, shared across the script
+files it reads.
 
-### 5.5 Intent drifts during a session
+### 5.2 Intent survives a long session
 
-A session does not keep one intent. It can start as a comparison of two repositories and
-turn into a change to one of them. The ask that justified the first ten calls does not
-justify the next one.
+A session can start as a comparison of two repositories and turn into a change to one of
+them. The gate does not decide which ask governs. It gives the reviewer the conversation
+in order, so a proposal, the user's "ok", and the call that follows stay next to each
+other.
 
-The gate reports the order of the user's asks, and nothing more:
+The reviewer is told four things:
 
-| In the prompt | What it is |
-| --- | --- |
-| The instruction in force | The newest user input, alone, first |
-| The user's earlier records | Every other record, labelled as history |
+1. The conversation is in order. User records are authority; agent records are evidence.
+2. A user record confirms or authorizes the agent text immediately before it, even when the
+   words are short or the user selected an option.
+3. Read the whole conversation for general intent. The newest user input is the strongest
+   signal, but earlier input and confirmations remain context.
+4. A destructive call is approved when the conversation authorizes it. Only a system root
+   is blocked before review.
 
-The reviewer is told three things about this:
+The package keeps the newest records under the caps and drops the oldest. It presents them
+in conversation order, so adjacency is preserved. A question or page answer appends like
+any other user input; it does not start a new authority window.
 
-1. The instruction in force is the newest user input.
-2. An earlier user input is history, not a standing order.
-3. A call that the newest request does not need is not justified by an older request
-   that did.
-
-Two mechanisms back that up:
-
-- **Only the newest ask opens the epoch.** An epoch-opening record is never dropped by the
-  budget, so if every ask kept that mark, an ask from twenty turns back would be in every
-  prompt for the rest of the session. Each new input clears the mark on the earlier ones.
-- **The instruction in force is ordered first.** When the budget is spent, the text that
-  survives is the text whose intent governs the call.
-
-The gate does not decide what the user meant, and it does not summarise the drift. It
-reports which ask is newest and lets the reviewer judge the call against it. A wrong guess
-about intent that is silent is worse than a reviewer that asks.
+User and agent text stay interleaved on purpose. A short "ok" only means something next to
+the proposal it answers, so the gate never separates the user's lines from the agent's.
 
 ## 6. Read before write
 
@@ -398,7 +392,9 @@ These are limits of the host hooks, not defects that a later version can remove:
 
 - **A create is reviewable but not protected by a read.** OpenCode's `write` takes no
   precondition, so a file can change between the gate's read and the write.
-- **A turn has no end hook.** The gate infers the end of a turn from the event stream.
+- **A session has no reset hook.** The gate forgets a session when the host emits
+  `session.end` or `session.deleted`. A host that emits neither keeps the package until the
+  process exits.
 - **The gate cannot see a configured `deny`.** That decision is final and does not reach
   the hook, which is why the gate can only tighten.
 - **Hook order is plugin load order.** A plugin that loads before this one can change the
@@ -408,8 +404,9 @@ These are limits of the host hooks, not defects that a later version can remove:
 - **The ledger records a read only when the gate itself sees it.** A file that the agent
   read before the plugin loaded, or through a shell command, has no entry, so the first
   edit of it denies. The agent reads it again, which costs one call.
-- **Text further than 8 turns back is omitted** from the request. The gate reports the
-  omission; it does not silently present the user's request as complete.
+- **Text beyond the package caps is omitted.** The package keeps the newest 32 records
+  within 16,384 bytes and drops the oldest. The gate reports the omission; it does not
+  silently present the conversation as complete.
 - **The catastrophe check reads one command string.** It does not expand a variable,
   follow a pipe into a second shell, or read a script that the command runs. A command
   that builds a destructive path at run time is not caught by it. Section 4.4 gives the
@@ -417,14 +414,16 @@ These are limits of the host hooks, not defects that a later version can remove:
 
 ## 9. What is not proven yet
 
-The design rests on documented host behaviour. These points are not confirmed against a
-live OpenCode instance:
+The gate has run on a live OpenCode instance: the plugin loaded, all hooks registered, the
+reviewer answered with the session's own model, and decisions applied to tool calls. These
+points remain unconfirmed:
 
-- whether the hook fires for a call that a rule already allows;
+- whether OpenCode discovers a plugin under `OPENCODE_CONFIG_DIR` (only the default global
+  config path has been exercised);
+- whether the permission hook fires for a call that a rule already allows (the gate uses
+  `tool.execute.before` for this reason);
 - whether the hook supplies resolved absolute paths;
-- whether the gate can read a file from inside the plugin;
-- whether the reviewer call accepts an explicit model and a system prompt;
-- whether the host's message identifiers let the gate correlate records.
+- whether the plugin's `setup` writes a line that the operator can see.
 
 Each one changes how much of this document holds. See [install.md](install.md) §8.
 

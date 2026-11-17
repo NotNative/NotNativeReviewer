@@ -99,7 +99,9 @@ that file yourself.
 The reload state is the opposite case. An install carries it forward so a test cycle does
 not lose the user's authority, but an uninstall deletes it: the file is a cache of what the
 user said, and removing the gate should not leave that copy on disk. A reinstall after an
-uninstall therefore starts cold, and the next call denies until the user speaks.
+uninstall therefore starts cold, and the next call denies until the user speaks. The file is
+kept until that next input, not for a fixed period, so an uninstall and reinstall inside
+minutes is the cold start the user actually chose.
 
 ## 6. Reinstall
 

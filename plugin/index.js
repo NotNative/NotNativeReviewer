@@ -233,8 +233,9 @@ export const setup = async (ctx, options = {}) => {
   const settings = mergeOptions(postures.options, options);
   // One review per tool call, though the host can send a call through two hooks (§3.2).
   const seen = buildDedupe();
-  // The package and the ledger survive a reload for a bounded time (§5.6). `0` turns it off.
-  const ttlMs = Number.isFinite(settings.stateTtlMs) ? settings.stateTtlMs : DEFAULT_TTL_MINUTES * 60000;
+  // The package and the ledger survive a reload until the user speaks again (§5.6). An
+  // explicit `stateTtlMs` adds a clock; `0` turns persistence off.
+  const ttlMs = Number.isFinite(settings.stateTtlMs) ? settings.stateTtlMs : null;
   const state = new StateFile({
     directory: stateDirectory(settings),
     ttlMs,
@@ -276,7 +277,7 @@ export const setup = async (ctx, options = {}) => {
       links: restored.links,
       expired: restored.expired,
       ageMinutes: restored.ageMinutes,
-      ttlMinutes: Math.round(ttlMs / 60000),
+      ttlMinutes: ttlMs === null ? "until_next_user_input" : Math.round(ttlMs / 60000),
     },
   });
 

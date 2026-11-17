@@ -444,7 +444,7 @@ Reading is the one row that does not depend on the request at all. The gate lets
 on the floor, so the reviewer is rarely asked, and the user never has to authorize knowledge
 (§4.1.3). The scrutiny belongs to what the agent does with what it read.
 
-### 5.6 The package survives a reload, for a bounded time
+### 5.6 The package survives a reload until the user speaks again
 
 An install or a restart unloads the plugin, and the package and the read ledger go with it.
 For a session the user is watching that is only an inconvenience: the next message re-anchors
@@ -462,17 +462,23 @@ So the gate writes a state file beside its audit log and reads it once, at setup
 Agent text is not written. It is evidence, and the gate sees it again as the session
 continues; authority is the thing a reload would otherwise lose.
 
+There is no clock on that authority. A restored session stays valid across any number of
+reloads, and the next input from the user replaces the record and becomes the authority. Two
+consequences follow, and both are intended:
+
+- A session from yesterday still restores, and its newest words are the ones that count.
+- Nothing refreshes the record except the user. A long agent run does not.
+
 Four rules keep the file from becoming a master key:
 
 - Only user records are written, never agent text.
 - The file is read once, at setup. Nothing in the event stream can restore a package, so a
   running session cannot conjure authority by asking for it.
-- A record expires from the time the user wrote it, not the time the file was written. The
-  default is 120 minutes, set by `NNR_STATE_TTL_MINUTES` in `nnr.env`; `0` turns persistence
-  off, and then every reload is a cold start.
+- An operator who wants a clock can set `NNR_STATE_TTL_MINUTES` in `nnr.env` to a number of
+  minutes. `0` turns persistence off, and then every reload is a cold start.
 - A defect restores nothing: a truncated write, an unknown version, a record with no
-  timestamp, or a timestamp in the future. The gate then behaves exactly as it does after a
-  cold start.
+  timestamp, or a timestamp a day ahead of the clock. The gate then behaves exactly as it
+  does after a cold start.
 
 The file holds the user's own words, so it is gitignored. An install carries it forward, and
 an uninstall deletes it, because removing the gate should not leave that copy behind.
@@ -527,6 +533,13 @@ gate reduces both to one key, so a read through one shape matches a write throug
 other. A path it cannot resolve keeps its raw form, and a mismatch denies rather than
 allows.
 
+Writes arrive one at a time. A tool call runs through a serialized effect, so the gate never
+writes the state file while another write is in flight (§5.6). Concurrent sessions are what
+change the file's *contents*, not its order: each save rewrites every session it holds, so a
+later save carries the earlier session's records. A save cannot lose a session that is still
+in memory, because only the newest input of each session is written, and the in-memory store
+is the source for all of them.
+
 ## 7. Every failure denies
 
 | Condition | Result |
@@ -536,6 +549,7 @@ allows.
 | The output is malformed twice | Deny, `reviewer_output_malformed` |
 | The reviewer cites text the user did not write | Deny, `reviewer_anchor_invalid` |
 | No user record in the package or its snapshot | Deny, `package_unavailable`; the model is told to ask a clarifying question |
+| The state file holds nothing restorable after a reload | The same `package_unavailable` denial, as though the file were absent (§5.6) |
 | A delegated session whose parent conversation is unknown | Deny, `primary_unavailable`; the model is told to ask for the overall goal |
 | A delegated approval that cites only the subagent's task | Deny, `reviewer_anchor_invalid` |
 | A modify of a file the session never read | Deny, `write_unread` |
@@ -580,10 +594,11 @@ These are limits of the host hooks, not defects that a later version can remove:
   `session.created` nor the client lookup provides the link, the child is reviewed as a
   top-level session and its task text carries the user's authority. A `delegation.observed`
   record is the sign that the link was found.
-- **Authority does not outlive the state TTL.** After a reload the gate restores what the
-  user said, but only for `NNR_STATE_TTL_MINUTES` after their newest message (§5.6). An
-  absence longer than that is a cold start, and the next call denies until the user speaks.
-  The state file also holds those words in plain text, which is why an uninstall deletes it.
+- **Restored authority has no clock of its own.** After a reload the gate restores what the
+  user said, and that stays valid until the user speaks again (§5.6). An operator can add a
+  clock with `NNR_STATE_TTL_MINUTES`, but by default a conversation from yesterday still
+  counts. The state file also holds those words in plain text, which is why an uninstall
+  deletes it.
 
 ## 9. What is not proven yet
 
@@ -646,7 +661,7 @@ without relying on a model to decide.
 | --- | --- | --- |
 | Forced close | `NNR_FORCE_DENY=1` | denies every call |
 | Forced open | `NNR_FORCE_ALLOW=1` | allows every call |
-| State across a reload | `NNR_STATE_TTL_MINUTES=120` | restores the package and ledger for 120 minutes after the user's newest message; `0` turns it off (§5.6) |
+| State across a reload | `NNR_STATE_TTL_MINUTES` (absent by default) | restores the package and ledger until the user speaks again; a number of minutes adds a clock, `0` turns it off (§5.6) |
 
 The settings are in the file `nnr.env`, in the plugin directory. To set a posture,
 change that file and restart OpenCode. The file is read once, at setup.

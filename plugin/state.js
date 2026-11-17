@@ -14,8 +14,9 @@
  *      authority is the thing a reload would otherwise lose.
  *   2. The file is read once, at setup. Nothing in the event stream can restore it, so a
  *      running session cannot conjure authority by asking for it.
- *   3. A record expires from the time the user wrote it, not the time the file was written.
- *      A record older than the TTL restores nothing, which is exactly the cold start.
+ *   3. A session restores until the user speaks again, across any number of reloads, and
+ *      each new input replaces the record. There is no clock on authority; an operator who
+ *      wants one can set `NNR_STATE_TTL_MINUTES`.
  *   4. A defect restores nothing. A truncated write, an unknown version, a record with no
  *      time: fail closed, then carry on as though the file were absent.
  *
@@ -28,8 +29,14 @@ export const STATE_FILE = "notnativereviewer-state.json";
 /** The format version. A file with any other version is ignored. */
 export const STATE_VERSION = 1;
 
-/** How long authority survives a reload, unless the settings file says otherwise. */
-export const DEFAULT_TTL_MINUTES = 120;
+/**
+ * How long a restored package lives, if a settings file names a minute value.
+ *
+ * The rule is no clock: authority persists until the user speaks again. A number here is a
+ * deliberate override by an operator who wants a stale conversation to stop counting
+ * sooner than the next input would. The shipped file leaves it out.
+ */
+export const DEFAULT_TTL_MINUTES = 0;
 
 /** The most one state file may hold. Older sessions are dropped to stay under it. */
 const MAX_STATE_BYTES = 262144;
@@ -39,8 +46,13 @@ const MAX_SESSIONS = 64;
 const MAX_USERS_PER_SESSION = 32;
 const MAX_READS_PER_SESSION = 256;
 
-/** A timestamp this far in the future is not a clock the gate trusts. */
-const CLOCK_SKEW_MS = 5 * 60 * 1000;
+/**
+ * The newest record may sit this far ahead of this process's clock and still restore.
+ *
+ * A timestamp is a host time, and two processes can disagree about the clock. An hour ahead
+ * is a disagreement; a day ahead is not a clock the gate trusts.
+ */
+const CLOCK_SKEW_MS = 60 * 60 * 1000;
 
 /**
  * The state file for one plugin directory.
@@ -61,16 +73,26 @@ export class StateFile {
   constructor(options) {
     const settings = options || {};
     this._directory = String(settings.directory || ".");
-    this._ttlMs = Number.isFinite(settings.ttlMs) && settings.ttlMs > 0 ? settings.ttlMs : 0;
+    // `null` means no clock: persist until the user speaks again. `0` turns it off.
+    this._ttlMs = Number.isFinite(settings.ttlMs) && settings.ttlMs >= 0 ? settings.ttlMs : null;
     this._layer = settings.layer || null;
     this._writer = typeof settings.writer === "function" ? settings.writer : null;
     this._now = typeof settings.now === "function" ? settings.now : () => Date.now();
     this._onFailure = typeof settings.onFailure === "function" ? settings.onFailure : null;
   }
 
-  /** Whether persistence is on at all. */
+  /** Whether persistence is on at all. No clock is on; `0` minutes is off. */
   get enabled() {
-    return this._ttlMs > 0 && this._writer !== null;
+    return this._ttlMs !== 0 && this._writer !== null;
+  }
+
+  /** Whether a session's newest record is older than an explicit TTL would allow. */
+  _isExpired(session, now) {
+    const newest = newestTime(session.users);
+    if (newest <= 0) return true;
+    if (newest - now > CLOCK_SKEW_MS) return true;
+    if (this._ttlMs === null) return false;
+    return now - newest > this._ttlMs;
   }
 
   /**
@@ -81,7 +103,7 @@ export class StateFile {
    *   expired: number, ageMinutes: number }}
    */
   restoreInto(stores) {
-    if (this._ttlMs <= 0) return summary(false, "disabled");
+    if (this._ttlMs === 0) return summary(false, "disabled");
     const parsed = this._readState();
     if (!parsed.ok) return summary(false, parsed.reason);
 
@@ -89,12 +111,11 @@ export class StateFile {
     const fresh = [];
     let expired = 0;
     for (const session of parsed.state.sessions) {
-      const newest = newestTime(session.users);
-      if (newest <= 0 || now - newest > this._ttlMs || newest - now > CLOCK_SKEW_MS) {
+      if (this._isExpired(session, now)) {
         expired += 1;
         continue;
       }
-      fresh.push({ ...session, newest });
+      fresh.push({ ...session, newest: newestTime(session.users) });
     }
     fresh.sort((a, b) => b.newest - a.newest);
     const kept = fresh.slice(0, MAX_SESSIONS);
@@ -142,7 +163,8 @@ export class StateFile {
   save(stores) {
     if (!this.enabled) return false;
     const now = this._now();
-    const sessions = freshSessions(stores.packages.exportForState(MAX_USERS_PER_SESSION), this._ttlMs, now);
+    const exported = stores.packages.exportForState(MAX_USERS_PER_SESSION);
+    const sessions = keepRestorable(exported, (session) => !this._isExpired(session, now));
     if (sessions.length === 0) return false;
     const ids = new Set(sessions.map((session) => session.id));
     const reads = stores.observations.exportForState(MAX_READS_PER_SESSION).filter((read) => ids.has(read.session));
@@ -241,17 +263,16 @@ function newestTime(users) {
 }
 
 /**
- * Drop the sessions whose authority has expired, and order the rest newest first.
+ * Keep the sessions that a later setup could restore, newest first.
  *
  * The same rule the restore applies, so a save never writes a record that could not come
  * back: a file that outlives its authority is a file that restores nothing.
  */
-function freshSessions(sessions, ttlMs, now) {
+function keepRestorable(sessions, isFresh) {
   const fresh = [];
   for (const session of sessions) {
-    const newest = newestTime(session.users);
-    if (newest <= 0 || now - newest > ttlMs) continue;
-    fresh.push({ ...session, newest });
+    if (!isFresh(session)) continue;
+    fresh.push({ ...session, newest: newestTime(session.users) });
   }
   fresh.sort((a, b) => b.newest - a.newest);
   return fresh

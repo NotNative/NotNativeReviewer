@@ -102,14 +102,16 @@ export function readSettings(directory, options = {}) {
  * Read the state TTL from a settings value.
  *
  * The value is a whole number of minutes, and `0` turns persistence off. A value the gate
- * cannot read disables persistence and reports why: an unreadable setting must not leave
+ * cannot read turns persistence off and reports why: an unreadable setting must not leave
  * the user's authority on disk for longer than the operator meant.
+ *
+ * A key that is absent means no clock: the package persists until the user speaks again.
  *
  * @param {string | undefined} raw
  * @returns {{ minutes: number | null, error?: string }}
  */
 export function parseTtlMinutes(raw) {
-  if (raw === undefined || raw === null) return { minutes: null };
+  if (raw === undefined || raw === null || String(raw).trim() === "") return { minutes: null };
   const text = String(raw).trim();
   if (/^\d+$/.test(text)) return { minutes: Number(text) };
   return { minutes: 0, error: "NNR_STATE_TTL_MINUTES: expected a whole number of minutes (0 disables)" };

@@ -39,6 +39,7 @@ export const STEP = Object.freeze({
   PACKAGE_SNAPSHOT: "package.snapshot",
   PACKAGE_FALLBACK: "package.fallback",
   STATE_RESTORED: "state.restored",
+  CTX_DUMP: "ctx.dump",
   DELEGATION_OBSERVED: "delegation.observed",
   CONTEXT_OBSERVED: "context.observed",
   EVENT_OBSERVED: "event.observed",

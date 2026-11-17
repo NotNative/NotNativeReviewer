@@ -26,6 +26,7 @@ import { buildDedupe } from "./dedupe.js";
 import { registerHooks } from "./hooks.js";
 import { parseTtlMinutes, readPluginDirectory, readSettings, SETTINGS_FILE } from "./settings.js";
 import { DEFAULT_TTL_MINUTES, StateFile } from "./state.js";
+import { registerProbe } from "./probe.js";
 import { VERSION } from "./version.js";
 
 export const id = "notnativereviewer";
@@ -292,6 +293,8 @@ export const setup = async (ctx, options = {}) => {
 
   // Exposed for a diagnostic: the gate's own record of the host context, not a public API.
   ctx.notnativereviewer = { telemetry, stores, context: ctx };
+  // Temporary probe (version 20261117-2): dump the host context once, at setup.
+  registerProbe(ctx, telemetry);
   return undefined;
 };
 

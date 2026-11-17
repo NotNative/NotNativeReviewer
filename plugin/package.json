@@ -27,6 +27,7 @@
     "version.js",
     "settings.js",
     "state.js",
+    "probe.js",
     "nnr.env"
   ],
   "keywords": [

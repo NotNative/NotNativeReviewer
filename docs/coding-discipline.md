@@ -73,27 +73,28 @@ tracked in the repository. A published clone does not include them.
 
 Run it before an install. The installer does not run it; the operator does.
 
-## 7. Version for each commit
+## 7. Version at release
 
-Every commit carries a product version. The version format is `yyyymmdd-<increment>`, where
-`yyyymmdd` is the commit date and `<increment>` counts the commits already made on that date.
-A date with no commit gets increment 1.
+The version changes at release, never at commit. Work happens on feature branches, where
+two developers may hold the same file; a per-commit bump would collide on every merge.
+One merge of the development branch into main carries exactly one version change.
 
-To set the version for a commit:
+The format is `yyyymmdd-<increment>`: the release date, and the count of releases already
+made on that date. A new date starts at increment 1. `<increment>` is a count of releases,
+not a build number.
 
-1. Run `node tools/bump-version.mjs`. It writes `src/nnr/version.js` and
-   `hosts/opencode/plugin/package.json` together.
-2. Commit those two files with the code.
-3. End the commit subject with `(version <yyyymmdd>-<increment>)`.
+To set the version, as part of the release merge into main:
 
-To confirm that the files match git history, run `node tools/bump-version.mjs --check`. The
-check passes when the working tree carries the version that the next commit must have. It
-fails when either file is stale, or when the two files disagree.
+1. Run `node tools/release-version.mjs --date <yyyymmdd>`. It writes `src/nnr/version.js`
+   and `hosts/opencode/plugin/package.json` together. `--set <version>` names the version
+   explicitly, for a scheme change or a numbered release.
+2. Commit those two files with the merge.
 
-The tool reads the version from `HEAD`, not from the working tree. Thus the check gives the
-same answer before and after you commit.
+To confirm that the two files agree, run `node tools/release-version.mjs --check`. It asks
+one question — do both files hold one valid value — and never compares against git
+history, so the answer is the same on any branch and at any commit.
 
-`<increment>` is a count, not a build number. It does not reset at midnight; it starts at 1
-for each new date.
+Ordinary commits carry no version change, and the check must never demand one: a check
+that fails on ordinary work teaches the operator to ignore it.
 
 Do not write a version into the files by hand. If you do, the two files can disagree.

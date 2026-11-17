@@ -7,29 +7,29 @@
  * `prepareCall(provider, model)` resolves a config-bound call, and its
  * `stream(options)` yields chunks whose `text-delta` members are the answer.
  *
- * The caller is only built when the operator names a provider and a model in the
- * plugin config. Without them there is no reviewer, and the gate falls back to the
- * floor-first behaviour: the operator decides every consequential call.
+ * The provider and model are resolved LIVE, per conversation, not from config:
+ * the session stream carries `model/selection` when a model is chosen and
+ * `assistant/message` whose source names the provider and model that actually
+ * ran. A user who switches models mid-stream — or because a provider died — is
+ * followed by the next review, and two conversations on two models are each
+ * reviewed with their own. A config value is only the fallback for a session
+ * that has shown no selection yet.
  */
 
 /**
- * Build the reviewer caller for this host, or null when no model is configured.
+ * Build the reviewer caller factory for this host.
  *
  * @param {object} ctx the plugin context
- * @param {{provider?: string, model?: string}} [config]
- * @returns {((args: {prompt: string, temperature: number, maxTokens: number}) => Promise<string>) | null}
+ * @returns {((target: {provider: string, model: string}, args: {prompt: string,
+ *   temperature: number, maxTokens: number}) => Promise<string>)}
  */
-export function buildDshCaller(ctx, config) {
-  if (!config || typeof config.provider !== "string" || typeof config.model !== "string") return null;
-  if (config.provider === "" || config.model === "") return null;
-  const provider = config.provider;
-  const model = config.model;
-  return async (args) => {
+export function buildDshCaller(ctx) {
+  return async (target, args) => {
     const llm = resolveLlm(ctx);
-    const prepared = await llm.prepareCall(provider, model);
+    const prepared = await llm.prepareCall(target.provider, target.model);
     const stream = prepared.stream({
-      provider,
-      model,
+      provider: target.provider,
+      model: target.model,
       messages: [{ role: "user", content: [{ type: "text", text: String(args.prompt || "") }] }],
       temperature: typeof args.temperature === "number" ? args.temperature : 0,
       maxTokens: typeof args.maxTokens === "number" ? args.maxTokens : 512,

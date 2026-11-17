@@ -26,7 +26,7 @@
 
 import { loadCore } from "./core.js";
 import { buildDshCaller } from "./model.js";
-import { reviewExecution, toPreToolDecision } from "./gate.js";
+import { reviewExecution, sessionIdOf } from "./gate.js";
 
 const core = await loadCore();
 const { STEP, Telemetry } = core.telemetry;
@@ -127,7 +127,8 @@ function textOf(content) {
 
 /**
  * The floor-first fallback decision: the deterministic catastrophe deny, then the
- * operator. Used while no reviewer model is configured.
+ * operator. Used when no model is known for the conversation — no selection, no
+ * assistant message, and no configured fallback.
  *
  * @param {object} exec a DSH ToolExecution
  * @returns {{kind: string, reason?: string}}
@@ -148,21 +149,37 @@ function fallbackDecision(exec) {
   return {
     kind: "ask",
     reason:
-      "NotNativeReviewer: no reviewer model is configured, so the operator decides this call.",
+      "NotNativeReviewer: no model is known for this conversation yet, so the operator decides this call.",
   };
 }
 
 /**
  * The pre-execute decision for one call, reviewer wired or not.
  *
+ * The reviewer's model is resolved live: the session's newest known selection —
+ * what the user chose or what actually ran last — wins; the configured value is
+ * only the fallback for a session that has shown none. A session with no model
+ * anywhere gets the floor-first fallback: the operator decides.
+ *
  * @param {object} exec a DSH ToolExecution
- * @param {{telemetry: object, stores: object, options: object, seen: object, fileLayer: object, hasReviewer: boolean}} deps
+ * @param {{telemetry: object, stores: object, config: object, callerFactory: Function,
+ *          seen: object, fileLayer: object}} deps
  * @returns {Promise<{kind: string, reason?: string}>}
  */
 async function decide(exec, deps) {
-  if (!deps.hasReviewer) return fallbackDecision(exec);
+  const sessionID = sessionIdOf(exec);
+  const known = deps.stores.models.get(sessionID);
+  const fallback = deps.config.provider && deps.config.model
+    ? { provider: deps.config.provider, model: deps.config.model }
+    : null;
+  const target = known || fallback;
+  if (!target) return fallbackDecision(exec);
+  const options = {
+    deadlineMs: deps.config.deadlineMs,
+    caller: (args) => deps.callerFactory(target, args),
+  };
   try {
-    return await reviewExecution(exec, deps);
+    return await reviewExecution(exec, { ...deps, options });
   } catch (error) {
     deps.telemetry.record(STEP.UNGOVERNED, {
       ok: false,
@@ -172,6 +189,52 @@ async function decide(exec, deps) {
     // with silence. The message names the failure, so the agent can see why.
     return { kind: "ask", reason: "NotNativeReviewer: the reviewer did not answer, so the operator decides this call." };
   }
+}
+
+/**
+ * One session event, dispatched by type.
+ *
+ * `model/selection` is the user's live choice; `assistant/message` is what actually
+ * ran. Both update the per-session model, so a mid-stream switch — including a
+ * switch away from a dead provider — is followed by the very next review.
+ * `user/message` with source kind `user` is authority; DSH stamps every producer's
+ * kind on its messages, so an injected context arrives with a kind that is not
+ * `user` and is refused — authority answered by the producer, not a role flag.
+ *
+ * @param {{telemetry: object, stores: object, state: object}} deps
+ * @param {object} session the session that logged the event
+ * @param {object} event the appended event
+ */
+function recordSessionEvent(deps, session, event) {
+  if (!event || typeof event.type !== "string") return;
+  const sessionID = String((session && session.id) || "unknown");
+  if (event.type === "model/selection" && event.data && event.data.provider && event.data.model) {
+    deps.stores.models.set(sessionID, { provider: String(event.data.provider), model: String(event.data.model) });
+    return;
+  }
+  if (event.type === "assistant/message") {
+    const message = event.data && event.data.message;
+    const source = message && message.source;
+    if (source && source.kind === "model" && source.provider && source.model) {
+      deps.stores.models.set(sessionID, { provider: String(source.provider), model: String(source.model) });
+    }
+    return;
+  }
+  if (event.type !== "user/message") return;
+  const message = event.data;
+  if (!message || !message.source || message.source.kind !== "user") return;
+  const text = textOf(message.content);
+  if (text === "") return;
+  const admitted = deps.stores.packages.recordUserInput({
+    sessionID,
+    id: String(message.id || ""),
+    text,
+    at: Date.now(),
+  });
+  deps.state.save(deps.stores);
+  deps.telemetry.record(STEP.PROMPT_ADMITTED, {
+    data: { source: "session.event", recorded: admitted.recorded, ...deps.stores.packages.summarise(sessionID) },
+  });
 }
 
 /**
@@ -190,21 +253,21 @@ export function apply(ctx, config = {}) {
     writer: stateWriter(),
     onFailure: (reason) => telemetry.record(STEP.STATE_RESTORED, { ok: false, data: { reason: `write:${reason}` } }),
   });
-  const caller = buildDshCaller(ctx, config);
+  const callerFactory = buildDshCaller(ctx);
   const deps = {
     telemetry,
     stores,
+    state,
+    config,
     seen: buildDedupe(),
     fileLayer: buildFileLayer(),
-    options: { caller, deadlineMs: config.deadlineMs },
-    hasReviewer: Boolean(caller),
+    callerFactory,
   };
 
   telemetry.record(STEP.SETUP, {
     data: {
       version: VERSION,
       host: "dsh",
-      hasReviewer: deps.hasReviewer,
       hasSessionEvent: Boolean(ctx && typeof ctx.on === "function"),
     },
   });
@@ -216,27 +279,7 @@ export function apply(ctx, config = {}) {
   });
 
   if (ctx && typeof ctx.on === "function") {
-    // The user's own words are authority. DSH stamps every user-role message with its
-    // producer's source kind, so an injected context arrives with a kind that is not
-    // 'user' and is refused here — authority answered by the producer, not a role flag.
-    ctx.on("session/event", (session, event) => {
-      if (!event || event.type !== "user/message") return;
-      const message = event.data;
-      if (!message || !message.source || message.source.kind !== "user") return;
-      const text = textOf(message.content);
-      if (text === "") return;
-      const sessionID = String((session && session.id) || "unknown");
-      const admitted = stores.packages.recordUserInput({
-        sessionID,
-        id: String(message.id || ""),
-        text,
-        at: Date.now(),
-      });
-      state.save(stores);
-      telemetry.record(STEP.PROMPT_ADMITTED, {
-        data: { source: "session.event", recorded: admitted.recorded, ...stores.packages.summarise(sessionID) },
-      });
-    });
+    ctx.on("session/event", (session, event) => recordSessionEvent(deps, session, event));
 
     ctx.on("tools/pre-execute", async (exec, next) => {
       telemetry.record(STEP.EVALUATE_START, { data: { action: String(exec && exec.name || "") } });

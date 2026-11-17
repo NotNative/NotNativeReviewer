@@ -37,9 +37,9 @@ script if the path is not the one you expect.
 
 ### 2.1 What the script does
 
-1. It resolves the target directory (§3).
-2. It checks the source: `plugin/package.json` and `plugin/index.js` must exist.
-3. It stages every file from `plugin/` into a temporary directory beside the target.
+1. It resolves the target directory (Â§3).
+2. It checks the source: `hosts/opencode/plugin/package.json`, `index.js` and `core.js` must exist, and the core at `src/nnr/` must hold `version.js`.
+3. It stages every adapter file from `hosts/opencode/plugin/` and every core file from `src/nnr/` as `nnr/<name>` into a temporary directory beside the target.
 4. It removes an existing plugin directory and moves the staged directory into place.
 5. It prints the installed version, the installed path, and the restart requirement.
 
@@ -53,7 +53,7 @@ half-written plugin.
 - It does not start or stop OpenCode or OpenChamber.
 - It does not run OpenCode, so install works with OpenCode closed.
 - It does not run the local tests in `tools/`, which are not tracked. Run those yourself
-  when your copy includes them (§5).
+  when your copy includes them (Â§5).
 
 ## 3. Where the plugin is installed
 
@@ -64,7 +64,7 @@ The script resolves the OpenCode global config directory in this order:
 3. `~/.config/opencode`.
 
 The plugin directory is `<global-config-dir>/plugins/<name>/`, where `<name>` is read from
-`plugin/package.json` in this repository. That is `notnativereviewer`. The installer prints the
+`hosts/opencode/plugin/package.json` in this repository. That is `notnativereviewer`. The installer prints the
 version it copied.
 
 On a default Windows install the target is:
@@ -139,13 +139,13 @@ OpenCode start. An install during a running session has no effect on that sessio
 Three checks, in this order. Do not skip the third.
 
 Before the three checks, confirm that the host loads plugins at all. A host in skip-start
-mode loads no plugin, and it hides that fact ([how-it-works.md](how-it-works.md) §11). When
+mode loads no plugin, and it hides that fact ([how-it-works.md](how-it-works.md) Â§11). When
 `OPENCODE_SKIP_START` is `true` in the host environment, the gate cannot run. Check that
 variable first, or run `nna opencode status` and look at `environment.skip_start`.
 
 1. **The plugin loads.** OpenCode writes a line when a plugin's setup runs. The gate writes
    a `setup` record to `notnativereviewer-telemetry.jsonl` in the plugin directory
-   ([telemetry.md](telemetry.md) §5). When that record is absent, the plugin did not load,
+   ([telemetry.md](telemetry.md) Â§5). When that record is absent, the plugin did not load,
    and the gate is not governing.
 2. **The gate registered its hooks.** The telemetry log shows a `hook.registered` record for
    each hook. A record with `registered: false` marks that hook point as ungoverned. The
@@ -171,13 +171,13 @@ node tools/check-catastrophe.mjs
 
 The first command checks the source against the size and naming rules. The second runs the
 gate against a mock host. The third checks the one deny that needs no model: a command that
-destroys a system root ([how-it-works.md](how-it-works.md) §4.4). All three must pass before
+destroys a system root ([how-it-works.md](how-it-works.md) Â§4.4). All three must pass before
 you trust an install.
 
 ### 5.2 Prove a deny with a test posture
 
 Step 3 needs the reviewer to disagree with the agent, which is hard to arrange on purpose. Use
-a test posture instead ([how-it-works.md](how-it-works.md) §12).
+a test posture instead ([how-it-works.md](how-it-works.md) Â§12).
 
 The shipped `nnr.env` sets both postures to `0`, so a fresh install lets the reviewer
 decide each call. To prove a deny, turn the forced close on:
@@ -215,7 +215,7 @@ $env:NNR_FORCE_DENY='1'; node tools/probe-installed.mjs
 The script reads `NNR_INSTALLED` when it is set, then `~/.config/opencode/plugins/notnativereviewer`.
 
 This check proves that the installed files hold the expected code. It does not prove that
-OpenCode loaded them. Only §5 step 1 proves that.
+OpenCode loaded them. Only Â§5 step 1 proves that.
 
 
 ## 6. Update
@@ -229,8 +229,8 @@ check out that version in the repository and run the installer.
 
 | Symptom | Cause | Action |
 | --- | --- | --- |
-| No `setup` record in `notnativereviewer-telemetry.jsonl` | The plugin did not load | Confirm the directory is `<config-dir>/plugins/notnativereviewer/` and restart OpenCode. Also confirm that `OPENCODE_SKIP_START` is not set (§5) |
-| The telemetry file does not exist | The plugin never ran | The sink writes the file at the first record. Check step 1 of §5 |
+| No `setup` record in `notnativereviewer-telemetry.jsonl` | The plugin did not load | Confirm the directory is `<config-dir>/plugins/notnativereviewer/` and restart OpenCode. Also confirm that `OPENCODE_SKIP_START` is not set (Â§5) |
+| The telemetry file does not exist | The plugin never ran | The sink writes the file at the first record. Check step 1 of Â§5 |
 | `hook.registered` with `registered: false` | The host does not provide that hook | The gate is partly ungoverned at that point; a call reaches no review there |
 | Every call denies | The reviewer cannot answer | Check that the conversation's model is reachable; look for `reviewer_unavailable` in the telemetry file |
 | A deny says "no record of the user's request" | The prompt hook did not run for that session, or the package was lost | The gate asks the model to get a clarification from the user rather than retry. Look for `packageSource=none` in `projection.built`, and report a lost package as a defect |
@@ -247,7 +247,7 @@ confirmed against a live OpenCode 2.3.0 instance:
 - Whether OpenCode reloads a changed plugin directory, or needs a restart. The installer
   assumes a restart either way, so an update always needs one.
 
-Each one is a check in §5. When a check fails, the gate is ungoverned, and the operator
+Each one is a check in Â§5. When a check fails, the gate is ungoverned, and the operator
 must see that rather than assume it.
 
 ### 8.1 The plugin export shape is verified

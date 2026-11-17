@@ -40,11 +40,11 @@ manifest_field() {
         | sed -n "s/.*\"$2\"[[:space:]]*:[[:space:]]*\"\([^\"]*\)\".*\$/\1/p" | head -n 1
 }
 
-# Read the plugin name from the repository's plugin/package.json. The repository is the
+# Read the plugin name from the repository's hosts/opencode/plugin/package.json. The repository is the
 # single source of the name: install and uninstall read the same field, so the plugin
 # directory is derived from the repository and not from a second hardcoded copy.
 read_repo_plugin_name() {
-    repo_manifest="$REPO_ROOT/plugin/package.json"
+    repo_manifest="$REPO_ROOT/hosts/opencode/plugin/package.json"
     [ -f "$repo_manifest" ] || fail "cannot read the plugin name: $repo_manifest is missing (run this script from the repository root)"
     name=$(manifest_field "$repo_manifest" name)
     [ -n "$name" ] || fail "cannot read the plugin name: $repo_manifest has no 'name' field"
@@ -116,7 +116,7 @@ done
 PLUGIN_NAME=$(read_repo_plugin_name)
 
 printf 'NotNativeReviewer uninstaller\n\n'
-printf 'plugin name      : %s   (from plugin/package.json)\n\n' "$PLUGIN_NAME"
+printf 'plugin name      : %s   (from hosts/opencode/plugin/package.json)\n\n' "$PLUGIN_NAME"
 
 if [ -n "$TARGET" ]; then
     config_dir=$(resolve_dir "$TARGET" '--target')

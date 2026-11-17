@@ -160,7 +160,8 @@ notnativereviewer/
   install.sh       macOS and Linux installer
   uninstall.ps1    Windows uninstaller
   uninstall.sh     macOS and Linux uninstaller
-  plugin/          the plugin source; every file ships
+  src/nnr/         the host-agnostic core; every file ships
+  hosts/           one adapter per harness; hosts/opencode/plugin/ ships today
   tools/           local quality gate and tests (kept out of Git)
   docs/            documentation
 ```

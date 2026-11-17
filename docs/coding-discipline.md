@@ -42,11 +42,11 @@ normative text. The same rules apply to a name:
 ## 3. No imports from the host package
 
 A plugin module imports only:
-- other modules in `plugin/`, by relative path;
+- the core's own modules, by relative path (the core is `src/nnr/`; a host adapter in `hosts/<harness>/plugin/` loads it through its `core.js` loader);
 - JavaScript built-ins.
 
 No module imports `@opencode/plugin`. The plugin loads from a directory where no
-`node_modules` exists ([install.md](install.md) §3). Types come from the host at run time,
+`node_modules` exists ([install.md](install.md) Â§3). Types come from the host at run time,
 not from an import.
 
 ## 4. Telemetry carries no content
@@ -54,7 +54,7 @@ not from an import.
 Every log record holds steps, counts, enums, digests, and durations. It does not hold
 prompt text, file bytes, tool arguments, or model output. A string longer than 48
 characters becomes a digest and a length
-([telemetry.js](../plugin/telemetry.js)).
+([telemetry.js](../src/nnr/telemetry.js)).
 
 ## 5. A failure does not change a decision
 
@@ -63,10 +63,10 @@ must not turn an `allow` into a `deny`, and must not turn a `deny` into an `allo
 
 ## 6. The check script
 
-The scripts named in this section and in §7 live in the local `tools/` folder, which is not
+The scripts named in this section and in Â§7 live in the local `tools/` folder, which is not
 tracked in the repository. A published clone does not include them.
 
-`tools/check-quality.mjs` reads every `.js` file in `plugin/` and fails when:
+`tools/check-quality.mjs` reads every `.js` file in `src/` and `hosts/` and fails when:
 - a file has more than 500 lines;
 - a function or method body has more than 60 lines;
 - a file imports a bare specifier that is not relative and not a built-in.
@@ -81,8 +81,8 @@ A date with no commit gets increment 1.
 
 To set the version for a commit:
 
-1. Run `node tools/bump-version.mjs`. It writes `plugin/version.js` and
-   `plugin/package.json` together.
+1. Run `node tools/bump-version.mjs`. It writes `src/nnr/version.js` and
+   `hosts/opencode/plugin/package.json` together.
 2. Commit those two files with the code.
 3. End the commit subject with `(version <yyyymmdd>-<increment>)`.
 

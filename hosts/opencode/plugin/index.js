@@ -4,8 +4,8 @@
  * Entrypoint for the OpenCode plugin loader.
  *
  * Constraint (docs/coding-discipline.md §3): this module exposes a plain
- * default export of `{ id, setup }` and imports no host package. It imports only its own
- * sibling modules, so it loads from a directory where no node_modules exists.
+ * default export of `{ id, setup }` and imports no host package. It loads the core from
+ * `core.js`, so it works from this repository and from an installed plugin directory.
  *
  * The gate registers five hooks (docs/how-it-works.md §3):
  *
@@ -18,16 +18,19 @@
  * Telemetry is local and carries no content (docs/coding-discipline.md §4).
  */
 
-import { STEP, Telemetry } from "./telemetry.js";
-import { ReviewerPackageStore } from "./package.js";
-import { ObservationStore } from "./observation.js";
-import { buildFileLayer } from "./files.js";
-import { buildDedupe } from "./dedupe.js";
+import { loadCore } from "./core.js";
 import { registerHooks } from "./hooks.js";
-import { parseTtlMinutes, readPluginDirectory, readSettings, SETTINGS_FILE } from "./settings.js";
-import { DEFAULT_TTL_MINUTES, StateFile } from "./state.js";
 import { registerProbe } from "./probe.js";
-import { VERSION } from "./version.js";
+
+const core = await loadCore();
+const { STEP, Telemetry } = core.telemetry;
+const { ReviewerPackageStore } = core.package;
+const { ObservationStore } = core.observation;
+const { buildFileLayer } = core.files;
+const { buildDedupe } = core.dedupe;
+const { parseTtlMinutes, readPluginDirectory, readSettings, SETTINGS_FILE } = core.settings;
+const { DEFAULT_TTL_MINUTES, StateFile } = core.state;
+const { VERSION } = core.version;
 
 export const id = "notnativereviewer";
 

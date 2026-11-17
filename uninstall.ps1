@@ -4,7 +4,7 @@
 
 .DESCRIPTION
     Removes <global-config-dir>/plugins/<name>/, where <name> is read from this
-    repository's plugin/package.json. The repository is the single source of the name, so
+    repository's hosts/opencode/plugin/package.json. The repository is the single source of the name, so
     install and uninstall cannot disagree about the directory.
 
     The global config directory is resolved in this order
@@ -55,11 +55,11 @@ function Read-ManifestField([string]$ManifestPath, [string]$Field) {
     return $null
 }
 
-# Read the plugin name from the repository's plugin/package.json. The repository is the
+# Read the plugin name from the repository's hosts/opencode/plugin/package.json. The repository is the
 # single source of the name: install and uninstall read the same field, so the plugin
 # directory is derived from the repository and not from a second hardcoded copy.
 function Get-RepoPluginName {
-    $repoManifest = Join-Path (Join-Path $RepoRoot 'plugin') 'package.json'
+    $repoManifest = Join-Path (Join-Path (Join-Path $RepoRoot 'hosts') 'opencode\plugin') 'package.json'
     if (-not (Test-Path -LiteralPath $repoManifest -PathType Leaf)) {
         Fail "cannot read the plugin name: $repoManifest is missing (run this script from the repository root)"
     }
@@ -126,7 +126,7 @@ $PluginName = Get-RepoPluginName
 
 Write-Host "NotNativeReviewer uninstaller"
 Write-Host ""
-Write-Host "plugin name      : $PluginName   (from plugin/package.json)"
+Write-Host "plugin name      : $PluginName   (from hosts/opencode/plugin/package.json)"
 Write-Host ""
 
 if ($Target) {

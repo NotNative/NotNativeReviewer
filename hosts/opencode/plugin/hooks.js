@@ -1,19 +1,19 @@
 /**
  * Hooks — registration for each host hook point.
  *
- * Each function returns true when the host provided the hook and the gate registered on it,
- * and false when it did not. A false result is a visible degradation: the gate records it,
- * and the host surface shows the gate as partially ungoverned.
- *
- * Imports only sibling modules.
+ * Each function returns true when the host provided the hook and the gate registered on
+ * it, and false when it did not — a visible degradation that the gate records, and the
+ * host surface shows as partially ungoverned. The core arrives through `core.js`.
  */
+import { loadCore } from "./core.js";
 
-import { digest, STEP } from "./telemetry.js";
-import { runEvaluation } from "./evaluate.js";
-import { recordWriteDigest } from "./ledger.js";
-import { readParentID } from "./parent-link.js";
-import { TRUST } from "./package.js";
-import { recordQuestionReply, recordRenderAnswer } from "./questions.js";
+const core = await loadCore();
+const { digest, STEP } = core.telemetry;
+const { runEvaluation } = core.evaluate;
+const { recordWriteDigest } = core.ledger;
+const { readParentID } = core.parentLink;
+const { TRUST } = core.package;
+const { recordQuestionReply, recordRenderAnswer } = core.questions;
 
 /** How many sessions' models to remember. Bounded, because sessions may never end. */
 const MAX_REMEMBERED_MODELS = 256;

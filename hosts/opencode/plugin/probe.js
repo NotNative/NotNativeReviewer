@@ -9,7 +9,9 @@
  * It is removed once the surface is known.
  */
 
-import { STEP } from "./telemetry.js";
+import { loadCore } from "./core.js";
+
+const { STEP } = (await loadCore()).telemetry;
 
 export async function registerProbe(ctx, telemetry) {
   if (!ctx) return;

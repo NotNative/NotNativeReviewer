@@ -3,8 +3,8 @@
     Install NotNativeReviewer into the OpenCode plugin discovery directory.
 
 .DESCRIPTION
-    Copies the plugin from this repository's plugin/ directory into the OpenCode global
-    config directory, under plugins/<name>/, where <name> is read from plugin/package.json.
+    Copies the plugin from this repository's hosts/opencode/plugin directory (with the core from src/nnr) into the OpenCode global
+    config directory, under plugins/<name>/, where <name> is read from the adapter package.json.
     The repository is the single source of the name, so install and uninstall cannot
     disagree about the directory.
 
@@ -61,11 +61,12 @@ function Read-ManifestField([string]$ManifestPath, [string]$Field) {
     return $null
 }
 
-# Read the plugin name from the repository's plugin/package.json. The repository is the
-# single source of the name: install and uninstall read the same field, so the plugin
-# directory is derived from the repository and not from a second hardcoded copy.
+# Read the plugin name from the repository's hosts/opencode/plugin/package.json. The
+# repository is the single source of the name: install and uninstall read the same
+# field, so the plugin directory is derived from the repository and not from a second
+# hardcoded copy.
 function Get-RepoPluginName {
-    $repoManifest = Join-Path (Join-Path $RepoRoot 'plugin') 'package.json'
+    $repoManifest = Join-Path (Join-Path (Join-Path $RepoRoot 'hosts') 'opencode\plugin') 'package.json'
     if (-not (Test-Path -LiteralPath $repoManifest -PathType Leaf)) {
         Fail "cannot read the plugin name: $repoManifest is missing (run this script from the repository root)"
     }
@@ -127,31 +128,45 @@ function Resolve-ConfigDir {
 }
 
 function Assert-Source {
-    $pluginSrc = Join-Path $RepoRoot "plugin"
+    # Two source trees: the host adapter (hosts/opencode/plugin) and the core it loads
+    # (src/nnr). The adapter is what the host's loader reads; the core travels with it
+    # as the nnr/ subdirectory of the installed plugin.
+    $pluginSrc = Join-Path $RepoRoot "hosts\opencode\plugin"
+    $coreSrc = Join-Path $RepoRoot "src\nnr"
     if (-not (Test-Path -LiteralPath $pluginSrc -PathType Container)) {
         Fail "source directory not found: $pluginSrc (run this script from the repository root)"
     }
-    foreach ($required in @('package.json', 'index.js')) {
+    if (-not (Test-Path -LiteralPath $coreSrc -PathType Container)) {
+        Fail "core directory not found: $coreSrc"
+    }
+    foreach ($required in @('package.json', 'index.js', 'core.js')) {
         $path = Join-Path $pluginSrc $required
         if (-not (Test-Path -LiteralPath $path -PathType Leaf)) {
             Fail "source file not found: $path"
         }
     }
-    return $pluginSrc
+    if (-not (Test-Path -LiteralPath (Join-Path $coreSrc 'version.js') -PathType Leaf)) {
+        Fail "core file not found: $(Join-Path $coreSrc 'version.js')"
+    }
+    return @($pluginSrc, $coreSrc)
 }
 
-# List the files to install: every regular file directly in plugin/. The plugin is
-# built from modules, so the installer copies what the repository holds and does not
-# keep its own list of names.
-function Get-PluginSourceFiles([string]$PluginSrc) {
+# List the files to install: every regular file in the adapter directory, and every
+# regular file in the core directory as nnr/<name>. The plugin is built from modules,
+# so the installer copies what the repository holds and does not keep its own list.
+function Get-PluginSourceFiles($Dirs) {
     $files = @()
-    try {
-        $entries = Get-ChildItem -LiteralPath $PluginSrc -File
-    } catch {
-        Fail "cannot list $PluginSrc : $($_.Exception.Message)"
+    foreach ($dir in $Dirs) {
+        try {
+            $entries = Get-ChildItem -LiteralPath $dir -File
+        } catch {
+            Fail "cannot list $dir : $($_.Exception.Message)"
+        }
+        foreach ($entry in $entries) {
+            $files += @{ File = $entry; Relative = if ($dir.EndsWith('nnr')) { "nnr/$($entry.Name)" } else { $entry.Name } }
+        }
     }
-    foreach ($entry in $entries) { $files += $entry }
-    if ($files.Count -eq 0) { Fail "the source directory $PluginSrc holds no files" }
+    if ($files.Count -eq 0) { Fail "the source directories hold no files" }
     return $files
 }
 
@@ -161,7 +176,7 @@ $PluginName = Get-RepoPluginName
 
 Write-Host "NotNativeReviewer installer"
 Write-Host ""
-Write-Host "plugin name      : $PluginName   (from plugin/package.json)"
+Write-Host "plugin name      : $PluginName   (from hosts/opencode/plugin/package.json)"
 Write-Host ""
 
 if ($Target) {
@@ -183,9 +198,9 @@ Write-Host ""
 
 # --- Step 2: check the source ------------------------------------------------
 
-$pluginSrc = Assert-Source
-$sourceFiles = Get-PluginSourceFiles $pluginSrc
-Write-Host "step 2/5  source checked: $pluginSrc ($($sourceFiles.Count) file(s))"
+$pluginSrcDirs = Assert-Source
+$sourceFiles = Get-PluginSourceFiles $pluginSrcDirs
+Write-Host "step 2/5  source checked: $($pluginSrcDirs -join ', ') ($($sourceFiles.Count) file(s))"
 Write-Host ""
 
 # --- Step 3: stage -----------------------------------------------------------
@@ -208,8 +223,10 @@ if (Test-Path -LiteralPath $stagingDir) {
 
 try {
     New-Item -ItemType Directory -Path $stagingDir -Force | Out-Null
+    New-Item -ItemType Directory -Path (Join-Path $stagingDir 'nnr') -Force | Out-Null
     foreach ($file in $sourceFiles) {
-        Copy-Item -LiteralPath $file.FullName -Destination $stagingDir -Force
+        $destination = Join-Path $stagingDir ($file.Relative -replace '/', '\')
+        Copy-Item -LiteralPath $file.File.FullName -Destination $destination -Force
     }
 } catch {
     try { Remove-Item -LiteralPath $stagingDir -Recurse -Force } catch { }
@@ -222,17 +239,25 @@ Write-Host "step 3/5  staged $($sourceFiles.Count) file(s) into $stagingDir"
 # the new one instead of being deleted with it.
 $telemetryName = "$PluginName-telemetry.jsonl"
 $stateName = "$PluginName-state.json"
+# The core owns both files, and the core lives in nnr/ of the installed plugin. An
+# install older than the core split kept them at the plugin root; that location is a
+# candidate too, so an upgrade carries the record forward instead of dropping it.
 foreach ($carryName in @($telemetryName, $stateName)) {
-    foreach ($candidate in @((Join-Path $stagingParent $carryName), (Join-Path $pluginDir $carryName))) {
-        if (Test-Path -LiteralPath $candidate -PathType Leaf) {
+    $carried = $false
+    foreach ($candidate in @(
+        (Join-Path $stagingParent $carryName),
+        (Join-Path $pluginDir $carryName),
+        (Join-Path (Join-Path $pluginDir 'nnr') $carryName)
+    )) {
+        if (-not $carried -and (Test-Path -LiteralPath $candidate -PathType Leaf)) {
             try {
-                Copy-Item -LiteralPath $candidate -Destination (Join-Path $stagingDir $carryName) -Force
-                Write-Host "          carried forward: $carryName"
+                Copy-Item -LiteralPath $candidate -Destination (Join-Path (Join-Path $stagingDir 'nnr') $carryName) -Force
+                Write-Host "          carried forward: nnr/$carryName"
+                $carried = $true
             } catch {
                 try { Remove-Item -LiteralPath $stagingDir -Recurse -Force } catch { }
                 Fail "cannot carry $candidate into $stagingDir : $($_.Exception.Message)"
             }
-            break
         }
     }
 }
@@ -271,8 +296,8 @@ if (Test-Path -LiteralPath $manifestPath -PathType Leaf) {
 # matches the source, so a partial copy fails here.
 $missing = @()
 foreach ($file in $sourceFiles) {
-    $installed = Join-Path $pluginDir $file.Name
-    if (-not (Test-Path -LiteralPath $installed -PathType Leaf)) { $missing += $file.Name }
+    $installed = Join-Path $pluginDir ($file.Relative -replace '/', '\')
+    if (-not (Test-Path -LiteralPath $installed -PathType Leaf)) { $missing += $file.Relative }
 }
 if ($missing.Count -gt 0) {
     Fail "install verification failed: $($missing -join ', ') missing from $pluginDir"

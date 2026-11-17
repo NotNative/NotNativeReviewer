@@ -23,8 +23,8 @@ Run the script for your platform from the repository root.
 
 ### 1.1 What the script does
 
-1. It reads the plugin name from `plugin/package.json` in this repository.
-2. It resolves the config directory the same way the installer does (§2), and appends
+1. It reads the plugin name from `hosts/opencode/plugin/package.json` in this repository.
+2. It resolves the config directory the same way the installer does (Â§2), and appends
    `plugins/<name>/`.
 3. It checks that the directory holds a `package.json` with that same name.
 4. It moves `notnativereviewer-telemetry.jsonl`, when the directory holds one, to
@@ -113,7 +113,7 @@ The script stops with an error rather than guess. Common causes:
 
 | Message | Cause | Action |
 | --- | --- | --- |
-| `cannot read the plugin name` | `plugin/package.json` is missing or has no `name` | Run the script from the repository root |
+| `cannot read the plugin name` | `hosts/opencode/plugin/package.json` is missing or has no `name` | Run the script from the repository root |
 | `has name '...', expected '...'` | The directory is not NotNativeReviewer | Check the path; the script did not touch the directory |
 | `is missing; not removing` | The directory holds no `package.json` | Inspect the directory before you remove it by hand |
 | `exists but is not a directory` | A file has the plugin's name | Inspect the path |

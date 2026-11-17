@@ -1,10 +1,10 @@
 #!/bin/sh
 # Install NotNativeReviewer into the OpenCode plugin discovery directory.
 #
-# Copies the plugin from this repository's plugin/ directory into the OpenCode global
-# config directory, under plugins/<name>/, where <name> is read from plugin/package.json.
+# Copies the adapter from hosts/opencode/plugin (with the core from src/nnr) into the OpenCode global
+# config directory, under plugins/<name>/, where <name> is read from the adapter package.json.
 #
-# The install target is resolved in this order (docs/install.md §3):
+# The install target is resolved in this order (docs/install.md Â§3):
 #
 #   1. OPENCODE_CONFIG_DIR, when set and not empty.
 #   2. $XDG_CONFIG_HOME/opencode, when XDG_CONFIG_HOME is set and not empty.
@@ -18,7 +18,7 @@
 #
 # Usage: ./install.sh [--target <path>]
 #   --target <path>  install to <path>/plugins/<name>/ instead of the resolved global
-#                    config directory, where <name> is read from plugin/package.json.
+#                    config directory, where <name> is read from the adapter package.json.
 #
 # Exit status: 0 on success, 1 on failure.
 
@@ -38,11 +38,11 @@ manifest_field() {
         | sed -n "s/.*\"$2\"[[:space:]]*:[[:space:]]*\"\([^\"]*\)\".*\$/\1/p" | head -n 1
 }
 
-# Read the plugin name from the repository's plugin/package.json. The repository is the
+# Read the plugin name from the repository's hosts/opencode/plugin/package.json. The repository is the
 # single source of the name: install and uninstall read the same field, so the plugin
 # directory is derived from the repository and not from a second hardcoded copy.
 read_repo_plugin_name() {
-    repo_manifest="$REPO_ROOT/plugin/package.json"
+    repo_manifest="$REPO_ROOT/hosts/opencode/plugin/package.json"
     [ -f "$repo_manifest" ] || fail "cannot read the plugin name: $repo_manifest is missing (run this script from the repository root)"
     name=$(manifest_field "$repo_manifest" name)
     [ -n "$name" ] || fail "cannot read the plugin name: $repo_manifest has no 'name' field"
@@ -114,7 +114,7 @@ done
 PLUGIN_NAME=$(read_repo_plugin_name)
 
 printf 'NotNativeReviewer installer\n\n'
-printf 'plugin name      : %s   (from plugin/package.json)\n\n' "$PLUGIN_NAME"
+printf 'plugin name      : %s   (from hosts/opencode/plugin/package.json)\n\n' "$PLUGIN_NAME"
 
 if [ -n "$TARGET" ]; then
     config_dir=$(resolve_dir "$TARGET" '--target')
@@ -146,18 +146,29 @@ printf 'Stop this script now if the plugin directory is not the intended one.\n\
 
 # --- Step 2: check the source ------------------------------------------------
 
-plugin_src="$REPO_ROOT/plugin"
-[ -d "$plugin_src" ] || fail "source directory not found: $plugin_src (run this script from the repository root)"
-for required in package.json index.js; do
-    [ -f "$plugin_src/$required" ] || fail "source file not found: $plugin_src/$required"
+adapter_src="$REPO_ROOT/hosts/opencode/plugin"
+core_src="$REPO_ROOT/src/nnr"
+[ -d "$adapter_src" ] || fail "source directory not found: $adapter_src (run this script from the repository root)"
+[ -d "$core_src" ] || fail "core directory not found: $core_src"
+for required in package.json index.js core.js; do
+    [ -f "$adapter_src/$required" ] || fail "source file not found: $adapter_src/$required"
 done
+[ -f "$core_src/version.js" ] || fail "core file not found: $core_src/version.js"
 
-# The plugin is built from modules. Collect every regular file in plugin/ so the
-# installer copies what the repository holds and does not keep its own list of names.
-source_files=$(find "$plugin_src" -maxdepth 1 -type f -print | sort)
-[ -n "$source_files" ] || fail "the source directory $plugin_src holds no files"
-source_count=$(printf '%s\n' "$source_files" | wc -l | tr -d ' ')
-printf 'step 2/5  source checked: %s (%s file(s))\n\n' "$plugin_src" "$source_count"
+# The plugin is built from modules. Collect every regular file in the adapter and the
+# core so the installer copies what the repository holds and does not keep its own list.
+source_files=$(find "$adapter_src" -maxdepth 1 -type f -print | sed "s|^$adapter_src/||" | sort
+              find "$core_src" -maxdepth 1 -type f -print | sed "s|^$core_src/|nnr/|" | sort)
+# Build the copy list as "absolute source<TAB>relative destination".
+copy_list=$(printf '%s\n' "$source_files" | while IFS= read -r rel; do
+    case "$rel" in
+        nnr/*) printf '%s\t%s\n' "$core_src/${rel#nnr/}" "$rel" ;;
+        *)     printf '%s\t%s\n' "$adapter_src/$rel" "$rel" ;;
+    esac
+done)
+[ -n "$copy_list" ] || fail "the source directories hold no files"
+source_count=$(printf '%s\n' "$copy_list" | wc -l | tr -d ' ')
+printf 'step 2/5  source checked: %s, %s (%s file(s))\n\n' "$adapter_src" "$core_src" "$source_count"
 
 # --- Step 3: stage -----------------------------------------------------------
 
@@ -166,21 +177,23 @@ staging_parent=$(dirname -- "$plugin_dir")
 
 staging_dir="$staging_parent/.$PLUGIN_NAME.staging.$$"
 rm -rf "$staging_dir"
-mkdir -p "$staging_dir" || fail "cannot create staging directory $staging_dir"
-printf '%s\n' "$source_files" | while IFS= read -r file; do
-    [ -f "$file" ] || continue
-    cp "$file" "$staging_dir/" || { rm -rf "$staging_dir"; fail "cannot stage $file"; }
+mkdir -p "$staging_dir/nnr" || fail "cannot create staging directory $staging_dir"
+printf '%s\n' "$copy_list" | while IFS="$(printf '\t')" read -r src rel; do
+    [ -f "$src" ] || continue
+    cp "$src" "$staging_dir/$rel" || { rm -rf "$staging_dir"; fail "cannot stage $src"; }
 done
 printf 'step 3/5  staged %s file(s) into %s\n' "$source_count" "$staging_dir"
 
 # The audit log and the reload state are the operator's record of what the gate did and
 # what the user asked for. A reinstall replaces the directory, so both are carried into
-# the new one instead of being deleted with it.
+# the new one instead of being deleted with it. The core owns both files, and the core
+# lives in nnr/; an install older than the core split kept them at the plugin root, so
+# that location is a candidate too.
 for carry_name in "$PLUGIN_NAME-telemetry.jsonl" "$PLUGIN_NAME-state.json"; do
-    for candidate in "$staging_parent/$carry_name" "$plugin_dir/$carry_name"; do
+    for candidate in "$staging_parent/$carry_name" "$plugin_dir/$carry_name" "$plugin_dir/nnr/$carry_name"; do
         if [ -f "$candidate" ]; then
-            cp "$candidate" "$staging_dir/$carry_name" || { rm -rf "$staging_dir"; fail "cannot carry $candidate"; }
-            printf '          carried forward: %s\n' "$carry_name"
+            cp "$candidate" "$staging_dir/nnr/$carry_name" || { rm -rf "$staging_dir"; fail "cannot carry $candidate"; }
+            printf '          carried forward: nnr/%s\n' "$carry_name"
             break
         fi
     done
@@ -204,16 +217,17 @@ if [ -f "$plugin_dir/package.json" ]; then
 fi
 
 # Verify that every staged file arrived, so a partial copy fails here.
-staged_count=$(find "$plugin_dir" -maxdepth 1 -type f -print | wc -l | tr -d ' ')
-[ "$staged_count" -eq "$source_count" ] \
-    || fail "install verification failed: $staged_count of $source_count file(s) in $plugin_dir"
+missing=$(printf '%s\n' "$copy_list" | while IFS="$(printf '\t')" read -r src rel; do
+    [ -f "$plugin_dir/$rel" ] || printf '%s ' "$rel"
+done)
+[ -z "$missing" ] || fail "install verification failed: $missing missing from $plugin_dir"
 
 printf 'step 5/5  done (%s file(s) verified)\n\n' "$source_count"
 printf 'installed version : %s\n' "$version"
 printf 'installed path    : %s\n\n' "$plugin_dir"
 printf 'Next step: restart OpenCode. OpenCode loads a plugin when it starts, so this\n'
 printf 'install is active after the next start.\n\n'
-printf 'To verify (docs/install.md §5):\n'
+printf 'To verify (docs/install.md Â§5):\n'
 printf '  1. the plugin loads    - look for the setup line in the OpenCode log\n'
 printf '  2. the gate is active  - check the gate status for a session\n'
 printf '  3. a deny reaches the model - request a call the reviewer denies\n'

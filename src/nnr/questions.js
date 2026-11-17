@@ -107,12 +107,20 @@ function readValue(value) {
   }
 }
 
-/** Whether a render call waited for the user's answer. */
+/**
+ * Whether a render call waited for the user's answer.
+ *
+ * The call's action arrives as `render` with the page action inside the parameters —
+ * observed live, version 20261117-8: `{"action":"render","parameters":{"awaitAnswer":
+ * true,...}}`. `render.page` is accepted too, so a result-shaped input still matches.
+ * The `awaitAnswer` flag is what makes the result a user answer; a page that did not
+ * wait has no answer to carry.
+ */
 function isWaitingRender(input) {
   if (!input || typeof input !== "object" || Array.isArray(input)) return false;
   const parameters = input.parameters && typeof input.parameters === "object" ? input.parameters : {};
   const action = String(input.action || parameters.action || "");
-  if (action !== "render.page") return false;
+  if (action !== "render" && action !== "render.page") return false;
   return input.awaitAnswer === true || parameters.awaitAnswer === true;
 }
 

@@ -31,6 +31,9 @@
     Attach to this harness by name (for example -Harness opencode). Without it, the
     installer proceeds directly when one adapter exists, and asks when several do.
 
+.PARAMETER DshProfile
+    The DSH profile to attach to (default web; `dsh web` runs the web profile).
+
 .EXAMPLE
     ./install.ps1
 
@@ -39,11 +42,15 @@
 
 .EXAMPLE
     ./install.ps1 -Harness opencode
+
+.EXAMPLE
+    ./install.ps1 -Harness dsh -DshProfile web
 #>
 [CmdletBinding()]
 param(
     [string]$Target,
-    [string]$Harness
+    [string]$Harness,
+    [string]$DshProfile = 'web'
 )
 
 Set-StrictMode -Version Latest
@@ -156,23 +163,29 @@ function Assert-Source([string]$AdapterSrc) {
     return @($AdapterSrc, $coreSrc)
 }
 
-# List the files to install: every regular file in the adapter directory, and every
-# regular file in the core directory as nnr/<name>. The plugin is built from modules,
-# so the installer copies what the repository holds and does not keep its own list.
+# List the files to install: exactly the manifest's own list. The adapter's
+# package.json "files" entries name what ships — adapter files at the root, core
+# files as nnr/<name> — so nothing beside them (a development state file, a local
+# audit log) can ride into an install. The manifest is the list; the directories
+# are only where the named files are found.
 function Get-PluginSourceFiles($Dirs) {
+    $pluginSrc = $Dirs[0]
+    $coreSrc = $Dirs[1]
+    $manifest = Get-Content -LiteralPath (Join-Path $pluginSrc 'package.json') -Raw | ConvertFrom-Json
+    $listed = @($manifest.files) + @('package.json')
+    if ($listed.Count -eq 0) { Fail "the adapter manifest lists no files: $(Join-Path $pluginSrc 'package.json')" }
     $files = @()
-    foreach ($dir in $Dirs) {
-        try {
-            $entries = Get-ChildItem -LiteralPath $dir -File
-        } catch {
-            Fail "cannot list $dir : $($_.Exception.Message)"
+    foreach ($relative in $listed) {
+        $source = if ($relative -like 'nnr/*') {
+            Join-Path $coreSrc ($relative -replace '^nnr/', '')
+        } else {
+            Join-Path $pluginSrc $relative
         }
-        foreach ($entry in $entries) {
-            $isCore = $dir -eq (Join-Path $RepoRoot 'src\nnr')
-            $files += @{ File = $entry; Relative = if ($isCore) { "nnr/$($entry.Name)" } else { $entry.Name } }
+        if (-not (Test-Path -LiteralPath $source -PathType Leaf)) {
+            Fail "a listed file is missing from the source: $relative ($source)"
         }
+        $files += @{ File = (Get-Item -LiteralPath $source); Relative = $relative }
     }
-    if ($files.Count -eq 0) { Fail "the source directories hold no files" }
     return $files
 }
 
@@ -237,6 +250,132 @@ function Select-Host {
     return $known[$index - 1]
 }
 
+# Stage the source files into a directory: adapter files at the root, core files
+# under nnr/. Returns the count staged. The caller creates and clears the directory.
+function Stage-SourceFiles([string]$StagingDir, $SourceFiles) {
+    New-Item -ItemType Directory -Path $StagingDir -Force | Out-Null
+    New-Item -ItemType Directory -Path (Join-Path $StagingDir 'nnr') -Force | Out-Null
+    foreach ($file in $SourceFiles) {
+        $destination = Join-Path $StagingDir ($file.Relative -replace '/', '\')
+        Copy-Item -LiteralPath $file.File.FullName -Destination $destination -Force
+    }
+    return $SourceFiles.Count
+}
+
+# The central NNR home: one directory that holds the packages the hosts attach to,
+# so an update of the core reaches every attached host at its next restart. Each
+# host's audit log and reload state live under it, keyed by host, because no two
+# live hosts may ever share one state file.
+function Get-NNRHome {
+    $base = $env:LOCALAPPDATA
+    if ([string]::IsNullOrWhiteSpace($base)) {
+        Fail "cannot resolve the install home: LOCALAPPDATA is not set"
+    }
+    return (Join-Path $base 'notnativereviewer')
+}
+
+# Attach the staged package to a DSH profile. The harness's own CLI is the path of
+# choice; when it is not on the PATH, the profile manifest is edited directly — the
+# same two records the CLI writes: the package in dependencies, the name in
+# dsh.profile.bundles, and a junction into the profile's node_modules. The profile
+# loads every named bundle on its next start, so no launch flags are needed.
+function Attach-Dsh([string]$PackageDir, [string]$ProfileName) {
+    $dsh = Get-Command dsh -ErrorAction SilentlyContinue
+    if ($dsh) {
+        Write-Host "step 4/5  attaching with the dsh CLI (profile $ProfileName)"
+        & dsh plugin --profile $ProfileName add $PackageDir
+        if ($LASTEXITCODE -ne 0) {
+            Fail "the dsh CLI refused the attachment (exit $LASTEXITCODE); its message above names the reason"
+        }
+        return
+    }
+
+    Write-Host "step 4/5  no dsh CLI on PATH; editing the profile manifest directly"
+    $dshHome = $env:DSH_HOME
+    if ([string]::IsNullOrWhiteSpace($dshHome)) {
+        $profile = [Environment]::GetFolderPath('UserProfile')
+        $dshHome = Join-Path $profile '.dsh'
+    }
+    $profileDir = Join-Path (Join-Path $dshHome 'profiles') $ProfileName
+    $manifestPath = Join-Path $profileDir 'package.json'
+    try {
+        if (Test-Path -LiteralPath $manifestPath -PathType Leaf) {
+            $manifest = Get-Content -LiteralPath $manifestPath -Raw | ConvertFrom-Json
+        } else {
+            New-Item -ItemType Directory -Path $profileDir -Force | Out-Null
+            $manifest = [pscustomobject]@{
+                name = "dsh-profile-$ProfileName"
+                private = $true
+                dependencies = [pscustomobject]@{}
+                dsh = [pscustomobject]@{ profile = [pscustomobject]@{ bundles = @() } }
+            }
+        }
+        $manifest | Add-Member -NotePropertyName dependencies -NotePropertyValue ([pscustomobject]@{}) -Force
+        $manifest.dependencies | Add-Member -NotePropertyName $PluginName -NotePropertyValue "file:$PackageDir" -Force
+        $manifest | Add-Member -NotePropertyName dsh -NotePropertyValue ([pscustomobject]@{ profile = [pscustomobject]@{ bundles = @() } }) -Force
+        $bundles = @($manifest.dsh.profile.bundles) + @($PluginName) | Select-Object -Unique
+        $manifest.dsh.profile.bundles = $bundles
+        $manifest | ConvertTo-Json -Depth 10 | Set-Content -LiteralPath $manifestPath -Encoding UTF8
+    } catch {
+        Fail "cannot edit the profile manifest $manifestPath : $($_.Exception.Message)"
+    }
+    $linkDir = Join-Path (Join-Path $profileDir 'node_modules') $PluginName
+    try {
+        if (Test-Path -LiteralPath $linkDir) { Remove-Item -LiteralPath $linkDir -Force -Recurse }
+        New-Item -ItemType Junction -Path $linkDir -Target $PackageDir | Out-Null
+    } catch {
+        Fail "cannot link $PackageDir into $linkDir : $($_.Exception.Message)"
+    }
+    Write-Host "          attached into $profileDir"
+}
+
+# Install into a DSH profile: stage the package into the central home, carry the
+# state and telemetry forward, replace the package directory, and attach.
+function Install-DshHost {
+    $pluginSrcDirs = Assert-Source $AdapterSrc
+    $sourceFiles = Get-PluginSourceFiles $pluginSrcDirs
+    Write-Host "step 2/5  source checked: $($pluginSrcDirs -join ', ') ($($sourceFiles.Count) file(s))"
+
+    $homeRoot = Get-NNRHome
+    $packageDir = Join-Path (Join-Path $homeRoot 'dsh') $PluginName
+    $stamp = Get-Date -Format 'yyyyMMddHHmmss'
+    $stagingDir = Join-Path $homeRoot ".staging.$stamp"
+
+    $telemetryName = "$PluginName-telemetry.jsonl"
+    $stateName = "$PluginName-state.json"
+    try {
+        Stage-SourceFiles $stagingDir $sourceFiles | Out-Null
+        foreach ($carryName in @($telemetryName, $stateName)) {
+            $candidate = Join-Path (Join-Path $packageDir 'nnr') $carryName
+            if (Test-Path -LiteralPath $candidate -PathType Leaf) {
+                Copy-Item -LiteralPath $candidate -Destination (Join-Path (Join-Path $stagingDir 'nnr') $carryName) -Force
+                Write-Host "          carried forward: nnr/$carryName"
+            }
+        }
+        if (Test-Path -LiteralPath $packageDir) { Remove-Item -LiteralPath $packageDir -Recurse -Force }
+        New-Item -ItemType Directory -Path (Split-Path -Parent $packageDir) -Force | Out-Null
+        Move-Item -LiteralPath $stagingDir -Destination $packageDir
+    } catch {
+        try { Remove-Item -LiteralPath $stagingDir -Recurse -Force } catch { }
+        Fail "cannot stage into $packageDir : $($_.Exception.Message)"
+    }
+    Write-Host "step 3/5  staged $($sourceFiles.Count) file(s) into $packageDir"
+
+    Attach-Dsh $packageDir $DshProfile
+
+    $version = Read-ManifestField (Join-Path $packageDir 'package.json') 'version'
+    Write-Host "step 5/5  done ($($sourceFiles.Count) file(s) staged)"
+    Write-Host ""
+    Write-Host "installed version : $version"
+    Write-Host "package directory : $packageDir"
+    Write-Host "dsh profile       : $DshProfile"
+    Write-Host ""
+    Write-Host "Next step: restart the harness (dsh web). The profile loads the bundle at"
+    Write-Host "start, so this attach is active after the next start. To name the reviewer's"
+    Write-Host "model, edit cordis.patch.yml in the package directory."
+    exit 0
+}
+
 # --- Step 1: find the target -------------------------------------------------
 
 $SelectedHost = Select-Host
@@ -248,6 +387,10 @@ Write-Host ""
 Write-Host "attaching to     : $($SelectedHost.Name)   (adapter: hosts/$($SelectedHost.Name)/plugin)"
 Write-Host "plugin name      : $PluginName   (from the adapter package.json)"
 Write-Host ""
+
+# Each host has its own attachment. The DSH host attaches through the harness's own
+# profile machinery and exits; the OpenCode path continues below.
+if ($SelectedHost.Name -eq 'dsh') { Install-DshHost }
 
 if ($Target) {
     $configDir = Resolve-Dir $Target '-Target'
@@ -292,17 +435,12 @@ if (Test-Path -LiteralPath $stagingDir) {
 }
 
 try {
-    New-Item -ItemType Directory -Path $stagingDir -Force | Out-Null
-    New-Item -ItemType Directory -Path (Join-Path $stagingDir 'nnr') -Force | Out-Null
-    foreach ($file in $sourceFiles) {
-        $destination = Join-Path $stagingDir ($file.Relative -replace '/', '\')
-        Copy-Item -LiteralPath $file.File.FullName -Destination $destination -Force
-    }
+    $stagedCount = Stage-SourceFiles $stagingDir $sourceFiles
 } catch {
     try { Remove-Item -LiteralPath $stagingDir -Recurse -Force } catch { }
     Fail "cannot stage the plugin files into $stagingDir : $($_.Exception.Message)"
 }
-Write-Host "step 3/5  staged $($sourceFiles.Count) file(s) into $stagingDir"
+Write-Host "step 3/5  staged $stagedCount file(s) into $stagingDir"
 
 # The audit log and the reload state are the operator's record of what the gate did and
 # what the user asked for. A reinstall replaces the directory, so both are carried into

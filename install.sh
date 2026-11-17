@@ -232,18 +232,33 @@ for required in package.json index.js core.js; do
 done
 [ -f "$core_src/version.js" ] || fail "core file not found: $core_src/version.js"
 
-# The plugin is built from modules. Collect every regular file in the adapter and the
-# core so the installer copies what the repository holds and does not keep its own list.
-source_files=$(find "$adapter_src" -maxdepth 1 -type f -print | sed "s|^$adapter_src/||" | sort
-              find "$core_src" -maxdepth 1 -type f -print | sed "s|^$core_src/|nnr/|" | sort)
+# The manifest is the list of what ships: the adapter's package.json "files" entries
+# name the adapter files at the root and the core files as nnr/<name>. Nothing beside
+# them — a development state file, a local audit log — may ride into an install.
+manifest_files() {
+    tr -d '\n\r' < "$1" \
+        | sed -n 's/.*"files"[[:space:]]*:[[:space:]]*\[\([^][]*\)\].*/\1/p' \
+        | tr ',' '\n' \
+        | sed -e 's/^[[:space:]]*//' -e 's/"//g' -e '/^$/d'
+}
+
+source_files=$(manifest_files "$adapter_src/package.json"; printf '%s\n' 'package.json')
+[ -n "$source_files" ] || fail "the adapter manifest lists no files: $adapter_src/package.json"
 # Build the copy list as "absolute source<TAB>relative destination".
 copy_list=$(printf '%s\n' "$source_files" | while IFS= read -r rel; do
     case "$rel" in
-        nnr/*) printf '%s\t%s\n' "$core_src/${rel#nnr/}" "$rel" ;;
-        *)     printf '%s\t%s\n' "$adapter_src/$rel" "$rel" ;;
+        nnr/*)
+            src="$core_src/${rel#nnr/}"
+            [ -f "$src" ] || fail "a listed file is missing from the source: $rel ($src)"
+            printf '%s\t%s\n' "$src" "$rel"
+            ;;
+        *)
+            src="$adapter_src/$rel"
+            [ -f "$src" ] || fail "a listed file is missing from the source: $rel ($src)"
+            printf '%s\t%s\n' "$src" "$rel"
+            ;;
     esac
 done)
-[ -n "$copy_list" ] || fail "the source directories hold no files"
 source_count=$(printf '%s\n' "$copy_list" | wc -l | tr -d ' ')
 printf 'step 2/5  source checked: %s, %s (%s file(s))\n\n' "$adapter_src" "$core_src" "$source_count"
 

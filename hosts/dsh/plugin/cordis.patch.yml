@@ -1,0 +1,12 @@
+# The bundle patch the DSH loader reads (dsh.bundle.patch). One insert row: the
+# adapter module, with the reviewer's model. `name` is the package specifier; the
+# profile's node_modules resolves it, because the installer links this directory
+# into the profile. Set provider/model to the model the harness already uses, or
+# leave them empty to run the deterministic layers only (the operator is asked for
+# every consequential call).
+insert:
+  - id: notnativereviewer
+    name: notnativereviewer
+    config:
+      provider: ""
+      model: ""

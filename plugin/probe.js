@@ -15,14 +15,15 @@ export async function registerProbe(ctx, telemetry) {
   if (!ctx) return;
   dumpSurface(ctx, telemetry);
 
-  await probeCall(ctx, telemetry, "session.get", async () => {
-    const directory = ctx.location && ctx.location.directory;
-    const id = processSessionID();
-    // The host's own call signature: an id and the directory it serves. A rejected attempt
-    // is recorded, not thrown, so the next shape can be tried from the log alone.
-    const reply = await ctx.session.get(id, { directory });
-    return reply;
-  });
+  // The host's session.get expects an object (§5.4). Each plausible shape is one attempt,
+  // and a success is dumped two levels deep, so the record's own fields answer whether a
+  // parent id is on it. Nothing is inferred; the record says so or it does not.
+  const directory = ctx.location && ctx.location.directory;
+  const id = processSessionID();
+  for (const shape of [{ sessionID: id }, { id }, { path: { id } }, { sessionID: id, directory }]) {
+    const name = `session.get.${Object.keys(shape).join(".")}`;
+    await probeCall(ctx, telemetry, name, async () => ctx.session.get(shape));
+  }
 
   // The hook-native path (§5.4): the prompt hook already receives every session's first
   // input, including a subagent's. If the host attaches the parent anywhere, it is on that
@@ -122,17 +123,36 @@ function processSessionID() {
   return env.OPENCODE_SESSION_ID || "";
 }
 
-/** Run one host call and record the field names it answered with, or the error. */
+/** Run one host call, and dump the reply's fields and any session id it carries. */
 async function probeCall(ctx, telemetry, name, call) {
   try {
     const value = await call();
-    const fields = value && typeof value === "object" ? Object.keys(value).join(",") : describe(value);
-    telemetry.record(STEP.CTX_DUMP, { data: { [`call.${name}`]: fields.length <= 44 ? fields : `${name}: ${fields.length} chars` } });
-    for (let start = 0; start < fields.length; start += 44) {
-      telemetry.record(STEP.CTX_DUMP, { data: { [`call.${name}.${start}`]: fields.slice(start, start + 44) } });
-    }
+    telemetry.record(STEP.CTX_DUMP, { data: { [`call.${name}.ok`]: describe(value) } });
+    dumpRecord(telemetry, name, value, "");
   } catch (error) {
     const message = String(error && error.message ? error.message : error);
     telemetry.record(STEP.CTX_DUMP, { ok: false, data: { [`call.${name}.error`]: message.slice(0, 44) } });
+  }
+}
+
+/**
+ * Walk a reply two levels deep, logging field names and session ids.
+ *
+ * A field name tells the gate what the record holds; a value that starts with `ses` is the
+ * thing a parent link would be. Prompt text and other content are never logged.
+ */
+function dumpRecord(telemetry, name, value, prefix, depth = 0) {
+  if (!value || typeof value !== "object" || depth > 2) return;
+  for (const [key, field] of Object.entries(value).slice(0, 16)) {
+    const path = `${prefix}${key}`;
+    if (typeof field === "string") {
+      if (field.startsWith("ses")) telemetry.record(STEP.CTX_DUMP, { data: { [`${name}.${path}`]: field.slice(0, 40) } });
+      continue;
+    }
+    if (field && typeof field === "object") {
+      const keys = Object.keys(field).slice(0, 14).join(",");
+      telemetry.record(STEP.CTX_DUMP, { data: { [`${name}.${path}`]: keys.length <= 40 ? keys : `${keys.length} keys` } });
+      dumpRecord(telemetry, name, field, `${path}.`, depth + 1);
+    }
   }
 }

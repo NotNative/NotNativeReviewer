@@ -15,13 +15,18 @@ core (`src/nnr/`); this directory holds only the DSH wiring.
   deterministic catastrophe deny, the read-before-write ledger, the unreadable-script
   deny, and the reviewer. A `bash` or `pwsh` call carries its command text, so all the
   shell rules apply unchanged; any other tool carries its arguments as JSON.
-- **The reviewer.** When the operator configures a provider and model (below), the
-  reviewer judges each call against the recorded user request through DSH's `llm`
-  runtime (`prepareCall` + `stream`). `approve` lets the call run, `deny_with_guidance`
-  and `hard_deny` deny, and `escalate_to_operator` becomes DSH's native `ask`, which
+- **The reviewer.** The reviewer judges each call against the recorded user request
+  through DSH's `llm` runtime (`prepareCall` + `stream`). Its model is resolved
+  **live, per conversation**: the session stream's `model/selection` (the user's
+  choice) and `assistant/message` (what actually ran) are followed, so a mid-stream
+  model switch — including a switch away from a dead provider — is picked up by the
+  very next review, and two conversations on two models are each reviewed with their
+  own. The config's `provider`/`model` is only the fallback for a session that has
+  shown no selection. `approve` lets the call run, `deny_with_guidance` and
+  `hard_deny` deny, and `escalate_to_operator` becomes DSH's native `ask`, which
   routes to the approval seam and degrades to a deny when no seam is mounted — the
-  gate fails closed either way. Without a configured model the fallback is the
-  floor-first behaviour: catastrophe denied, everything else asked.
+  gate fails closed either way. A conversation with no known model at all gets the
+  floor-first fallback: catastrophe denied, everything else asked.
 - **Persistence and telemetry.** The package survives a reload (no clock, until the
   user speaks again), and the audit log is written beside the core with no content in
   it, as everywhere else.
@@ -45,10 +50,11 @@ insert:
 pnpm dsh web --patch ./cordis-nnr.yml
 ```
 
-`provider` and `model` name the reviewer's model through the host's own llm runtime —
-the same conversation model the user already configured. Without them the gate still
-runs its deterministic layers and asks the operator for the rest. `deadlineMs` is
-optional (default 120000).
+`provider` and `model` are only the reviewer's fallback for a conversation that has
+shown no model selection yet — the live value always comes from the conversation's
+own `model/selection` and `assistant/message` events. The installer pre-fills them
+from the profile's `agent-default-model` row. `deadlineMs` is optional (default
+120000).
 
 Bundling (the npm `dsh` bundle field) would inline the core import; until the core is
 marked external, attach unbundled through the patch path.

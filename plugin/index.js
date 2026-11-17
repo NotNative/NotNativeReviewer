@@ -294,7 +294,8 @@ export const setup = async (ctx, options = {}) => {
   // Exposed for a diagnostic: the gate's own record of the host context, not a public API.
   ctx.notnativereviewer = { telemetry, stores, context: ctx };
   // Temporary probe (version 20261117-2): dump the host context once, at setup.
-  registerProbe(ctx, telemetry);
+  // It must not delay setup, so a host call behind it is left to settle on its own.
+  registerProbe(ctx, telemetry).catch(() => {});
   return undefined;
 };
 

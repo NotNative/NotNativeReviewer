@@ -30,6 +30,10 @@ import { reviewExecution, sessionIdOf } from "./gate.js";
 
 const core = await loadCore();
 const { STEP, Telemetry } = core.telemetry;
+// An import line on stderr: proves the module was imported, ahead of any apply.
+if (typeof console !== "undefined" && console.error) {
+  console.error(`[notnativereviewer] module imported, core loaded ${core.version.VERSION}`);
+}
 const { ReviewerPackageStore } = core.package;
 const { ObservationStore } = core.observation;
 const { StateFile } = core.state;
@@ -77,11 +81,18 @@ function telemetrySink() {
   const fs = nodeFs();
   if (fs && typeof fs.appendFileSync === "function") {
     const path = `${readPluginDirectory()}${readPluginDirectory().includes("\\") ? "\\" : "/"}${TELEMETRY_FILE}`;
+    let complained = false;
     return (line) => {
       try {
         fs.appendFileSync(path, `${line}\n`, "utf8");
-      } catch {
-        // A logging failure must not change a decision (coding-discipline.md §5).
+      } catch (error) {
+        // A logging failure must not change a decision (coding-discipline.md §5),
+        // but it must also not be invisible: the operator is told once per process,
+        // on stderr, where the audit log was meant to go and why it could not.
+        if (!complained && typeof console !== "undefined" && console.error) {
+          complained = true;
+          console.error(`[notnativereviewer] telemetry write failed for ${path}: ${error && error.message}`);
+        }
       }
     };
   }
@@ -244,6 +255,11 @@ function recordSessionEvent(deps, session, event) {
  * @param {{provider?: string, model?: string, deadlineMs?: number}} [config]
  */
 export function apply(ctx, config = {}) {
+  // A boot line on stderr: one line per process, visible wherever the host's
+  // stderr goes. It says the plugin activated and names its core directory.
+  if (typeof console !== "undefined" && console.error) {
+    console.error(`[notnativereviewer] activated, version ${VERSION}, core at ${readPluginDirectory()}`);
+  }
   const telemetry = new Telemetry({ write: telemetrySink() });
   const stores = { packages: new ReviewerPackageStore(), observations: new ObservationStore(), models: new Map() };
   const state = new StateFile({
@@ -280,7 +296,6 @@ export function apply(ctx, config = {}) {
 
   if (ctx && typeof ctx.on === "function") {
     ctx.on("session/event", (session, event) => recordSessionEvent(deps, session, event));
-
     ctx.on("tools/pre-execute", async (exec, next) => {
       telemetry.record(STEP.EVALUATE_START, { data: { action: String(exec && exec.name || "") } });
       const decision = await decide(exec, deps);
@@ -301,6 +316,27 @@ export function apply(ctx, config = {}) {
     });
   }
 
-  // Exposed for a diagnostic: the gate's own record of the host context, not a public API.
-  ctx.notnativereviewer = { telemetry, stores, state, context: ctx };
+  // Exposed for a diagnostic: the gate's own record, readable through diagnosticFor.
+  // A cordis context refuses arbitrary property assignment, so the OpenCode habit of
+  // stamping it onto ctx is guarded here and the record is kept on the adapter side.
+  diagnostics.set(ctx, { telemetry, stores, state, context: ctx });
+  try {
+    ctx.notnativereviewer = diagnostics.get(ctx);
+  } catch {
+    // The host protects its context; diagnosticFor still answers.
+  }
+}
+
+/** Per-context diagnostic records, keyed by the context instance itself. */
+const diagnostics = new WeakMap();
+
+/**
+ * The gate's own record for one host context: telemetry, stores, state. Not a public
+ * API; a diagnostic for tests and operators.
+ *
+ * @param {object} ctx the host context passed to apply
+ * @returns {object | undefined}
+ */
+export function diagnosticFor(ctx) {
+  return diagnostics.get(ctx);
 }

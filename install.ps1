@@ -333,23 +333,45 @@ function Attach-Dsh([string]$PackageDir, [string]$ProfileName) {
         }
     }
 
-    # 3. The patch row. An existing row is left alone (the operator may have tuned
-    #    the config); a fresh row takes the profile's own default model, so the
-    #    reviewer judges with the model the conversation already uses.
+    # 3. The patch row. The patch layer's rows are id-targeted overrides of entries
+    #    the base bundle already defines; a NEW plugin is an `insert` row (observed
+    #    live, 2026-11-17: a plain row is silently treated as an override of an
+    #    entry that does not exist and is dropped). The module name is relative to
+    #    the profile directory, where the junction sits — the loader anchors its
+    #    import base there, and a relative name needs no resolution machinery.
+    #    An existing insert row is left alone (the operator may have tuned the
+    #    config); older shapes are migrated; a fresh row takes the profile's own
+    #    default model, so the reviewer judges with the model the conversation uses.
     $patchPath = Join-Path $profileDir 'cordis.patch.yml'
+    $moduleName = "./node_modules/$PluginName/index.js"
     try {
         $patch = if (Test-Path -LiteralPath $patchPath -PathType Leaf) { Get-Content -LiteralPath $patchPath -Raw } else { "" }
-        if ($patch -match '(?m)^-\s*id:\s*notnativereviewer\s*$') {
-            # An existing row is honoured, but an older one names the module by bare
-            # package name, which the embedded runtime cannot resolve; migrate it.
-            $fileUrl = "file:///" + ($PackageDir -replace '\\', '/') + "/index.js"
-            $migrated = $patch -replace '(?m)^(\s*name:\s*)notnativereviewer\s*$', ('$1' + $fileUrl)
-            if ($migrated -ne $patch) {
-                [System.IO.File]::WriteAllText($patchPath, $migrated)
-                Write-Host "          migrated the existing row to an absolute module path"
-            } else {
-                Write-Host "          the patch row already exists; config left as the operator set it"
+        $insertRow = @"
+- insert:
+    - id: $PluginName
+      name: $moduleName
+      config:
+        provider: `"{0}`"
+        model: `"{1}`"
+"@
+        if ($patch -match '(?m)^-\s*insert:\s*$' -and $patch -match "(?m)^\s+-\s*id:\s*$PluginName\s*$") {
+            Write-Host "          the patch row already exists; config left as the operator set it"
+            return
+        }
+        if ($patch -match "(?m)^-\s*id:\s*$PluginName\s*$") {
+            # An older shape: a plain row, which the loader reads as an override and
+            # drops. Its config values are carried into the insert row.
+            $oldProvider = ""
+            $oldModel = ""
+            if ($patch -match '(?s)- id: notnativereviewer\b.*?provider:\s*"?([^\r\n"]*)"?\s*\r?\n\s*model:\s*"?([^\r\n"]*)"?\s*\r?\n') {
+                $oldProvider = $Matches[1]
+                $oldModel = $Matches[2]
             }
+            $row = $insertRow -f $oldProvider, $oldModel
+            $pattern = "(?ms)^- id: " + $PluginName + "\b.*?(?=^- |\z)"
+            $migrated = [System.Text.RegularExpressions.Regex]::Replace($patch, $pattern, ($row + "`r`n"))
+            [System.IO.File]::WriteAllText($patchPath, $migrated)
+            Write-Host "          migrated the plain row into an insert row"
             return
         }
         $provider = ""
@@ -358,23 +380,9 @@ function Attach-Dsh([string]$PackageDir, [string]$ProfileName) {
             $provider = $Matches[1].Trim()
             $model = $Matches[2].Trim()
         }
-        # The row's name is an absolute file URL, not a bare package name. The desktop
-        # application runs its harness inside the Electron process, and a bare name
-        # resolves from asar-internal node_modules, where the profile junction is
-        # unreachable (observed live: the row was silently skipped). A file URL needs
-        # no resolution anchor at all.
-        $fileUrl = "file:///" + ($PackageDir -replace '\\', '/') + "/index.js"
-        $row = @"
-
-# NotNativeReviewer (added by the NotNativeReviewer installer). The reviewer model
-# follows the profile's own default; edit it here to judge with a different model.
-- id: notnativereviewer
-  name: $fileUrl
-  config:
-    provider: "$provider"
-    model: "$model"
-"@
-        $patch = $patch.TrimEnd() + "`r`n" + $row
+        $row = $insertRow -f $provider, $model
+        $patch = $patch.TrimEnd() + "`r`n`r`n# NotNativeReviewer (added by the NotNativeReviewer installer). The reviewer model" + `
+            "`r`n# follows the profile's own default; edit it here to judge with a different model." + "`r`n" + $row
         [System.IO.File]::WriteAllText($patchPath, $patch)
         if ($model -ne "") {
             Write-Host "          reviewer model follows the profile default: $provider / $model"

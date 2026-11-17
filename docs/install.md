@@ -1,8 +1,9 @@
 # Install NotNativeReviewer
 
-NotNativeReviewer installs as an OpenCode plugin, through OpenCode's plugin directory
-discovery. The installer copies the plugin into a directory that OpenCode already reads.
-**No configuration file is edited.**
+NotNativeReviewer attaches to a harness as a plugin. The installer knows the harnesses
+this repository can attach to, detects which are installed, and copies the adapter for
+the chosen harness — with the shared core from `src/nnr/` — into a directory that the
+harness already reads. **No configuration file is edited.**
 
 ---
 
@@ -10,9 +11,9 @@ discovery. The installer copies the plugin into a directory that OpenCode alread
 
 You need:
 
-- OpenCode 2.x.
+- A harness this repository can attach to (today: OpenCode 2.x).
 - The NotNativeReviewer repository on the machine.
-- Permission to write into your own OpenCode config directory.
+- Permission to write into your own config directory for that harness.
 
 You do not need a second model. The reviewer uses the model that the conversation uses.
 
@@ -34,6 +35,12 @@ Run the script for your platform from the repository root.
 
 The script prints the resolved path before it writes anything. Read that line. Stop the
 script if the path is not the one you expect.
+
+When the repository holds adapters for more than one harness, the installer lists the
+attachable harnesses and which ones it detected on this machine, and asks you to choose.
+`-Harness <name>` (PowerShell) or `--host <name>` (shell) pins the choice and skips the
+question. With a single adapter the installer proceeds without asking, so a first
+install stays non-interactive.
 
 ### 2.1 What the script does
 

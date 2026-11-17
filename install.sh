@@ -38,19 +38,13 @@ manifest_field() {
         | sed -n "s/.*\"$2\"[[:space:]]*:[[:space:]]*\"\([^\"]*\)\".*\$/\1/p" | head -n 1
 }
 
-# Read the plugin name from the repository's hosts/opencode/plugin/package.json. The repository is the
-# single source of the name: install and uninstall read the same field, so the plugin
-# directory is derived from the repository and not from a second hardcoded copy.
-read_repo_plugin_name() {
-    repo_manifest="$REPO_ROOT/hosts/opencode/plugin/package.json"
-    [ -f "$repo_manifest" ] || fail "cannot read the plugin name: $repo_manifest is missing (run this script from the repository root)"
-    name=$(manifest_field "$repo_manifest" name)
-    [ -n "$name" ] || fail "cannot read the plugin name: $repo_manifest has no 'name' field"
-    printf '%s' "$name"
-}
+# Read the plugin name from the selected adapter's package.json; defined at Step 1,
+# where the adapter is chosen. The repository is the single source of the name: install
+# and uninstall read the same field, so the plugin directory is derived from the
+# repository and not from a second hardcoded copy.
 
 usage() {
-    printf 'usage: %s [--target <path>]\n' "$0" >&2
+    printf 'usage: %s [--target <path>] [--host <name>]\n' "$0" >&2
     exit 1
 }
 
@@ -92,6 +86,7 @@ non_empty_env() {
 }
 
 TARGET=''
+HARNESS=''
 while [ $# -gt 0 ]; do
     case "$1" in
         --target)
@@ -103,6 +98,15 @@ while [ $# -gt 0 ]; do
             TARGET=${1#--target=}
             shift
             ;;
+        --host)
+            [ $# -ge 2 ] || usage
+            HARNESS=$2
+            shift 2
+            ;;
+        --host=*)
+            HARNESS=${1#--host=}
+            shift
+            ;;
         *)
             usage
             ;;
@@ -111,10 +115,81 @@ done
 
 # --- Step 1: find the target -------------------------------------------------
 
+# The hosts this repository can attach to. NNR is a parasite: it latches onto the
+# harness the user runs. A host is attachable when its adapter directory exists in the
+# repository; it is detected when the harness appears installed on this machine.
+# Detection is information, not a gate — a first install of a harness whose directories
+# do not exist yet is still legitimate. Format: name<tab>adapter<tab>detected(0|1).
+known_hosts() {
+    for name in opencode dsh; do
+        adapter="$REPO_ROOT/hosts/$name/plugin"
+        [ -d "$adapter" ] || continue
+        case "$name" in
+            opencode) detected=0
+                [ -n "$(non_empty_env OPENCODE_CONFIG_DIR)" ] && detected=1
+                [ -d "$HOME/.config/opencode" ] && detected=1
+                command -v opencode >/dev/null 2>&1 && detected=1
+                ;;
+            dsh) detected=0
+                [ -n "$(non_empty_env DSH_HOME)" ] && detected=1
+                [ -d "$HOME/.dsh" ] && detected=1
+                command -v dsh >/dev/null 2>&1 && detected=1
+                ;;
+        esac
+        printf '%s\t%s\t%s\n' "$name" "$adapter" "$detected"
+    done
+}
+
+select_host() {
+    known=$(known_hosts)
+    [ -n "$known" ] || fail "no host adapter exists under hosts/ (run this script from the repository root)"
+    count=$(printf '%s\n' "$known" | wc -l | tr -d ' ')
+    if [ -n "$HARNESS" ]; then
+        chosen=$(printf '%s\n' "$known" | while IFS="$(printf '\t')" read -r name adapter detected; do
+            [ "$name" = "$HARNESS" ] && printf '%s\t%s' "$name" "$adapter"
+        done)
+        [ -n "$chosen" ] || fail "unknown harness '$HARNESS'; this repository can attach to: $(printf '%s\n' "$known" | cut -f1 | tr '\n' ' ')"
+        printf '%s' "$chosen"
+        return 0
+    fi
+    if [ "$count" -eq 1 ]; then
+        printf '%s' "$known"
+        return 0
+    fi
+    printf 'Attachable harnesses:\n'
+    printf '%s\n' "$known" | while IFS="$(printf '\t')" read -r name adapter detected; do
+        if [ "$detected" = 1 ]; then state='detected on this machine'; else state='not detected on this machine'; fi
+        printf '  %s  (%s)\n' "$name" "$state"
+    done
+    printf 'Select the harness to attach to [1-%s]: ' "$count"
+    IFS= read -r answer
+    case "$answer" in
+        ''|*[!0-9]*) fail "selection '$answer' is not a number" ;;
+    esac
+    [ "$answer" -ge 1 ] && [ "$answer" -le "$count" ] || fail "selection '$answer' is not one of 1..$count"
+    printf '%s' "$known" | sed -n "${answer}p"
+}
+
+selected=$(select_host)
+SELECTED_NAME=$(printf '%s' "$selected" | cut -f1)
+ADAPTER_SRC=$(printf '%s' "$selected" | cut -f2)
+
+# Read the plugin name from the selected adapter's package.json. The repository is the
+# single source of the name: install and uninstall read the same field, so the plugin
+# directory is derived from the repository and not from a second hardcoded copy.
+read_repo_plugin_name() {
+    repo_manifest="$ADAPTER_SRC/package.json"
+    [ -f "$repo_manifest" ] || fail "cannot read the plugin name: $repo_manifest is missing (run this script from the repository root)"
+    name=$(manifest_field "$repo_manifest" name)
+    [ -n "$name" ] || fail "cannot read the plugin name: $repo_manifest has no 'name' field"
+    printf '%s' "$name"
+}
+
 PLUGIN_NAME=$(read_repo_plugin_name)
 
 printf 'NotNativeReviewer installer\n\n'
-printf 'plugin name      : %s   (from hosts/opencode/plugin/package.json)\n\n' "$PLUGIN_NAME"
+printf 'attaching to     : %s   (adapter: hosts/%s/plugin)\n' "$SELECTED_NAME" "$SELECTED_NAME"
+printf 'plugin name      : %s   (from the adapter package.json)\n\n' "$PLUGIN_NAME"
 
 if [ -n "$TARGET" ]; then
     config_dir=$(resolve_dir "$TARGET" '--target')
@@ -146,7 +221,7 @@ printf 'Stop this script now if the plugin directory is not the intended one.\n\
 
 # --- Step 2: check the source ------------------------------------------------
 
-adapter_src="$REPO_ROOT/hosts/opencode/plugin"
+adapter_src="$ADAPTER_SRC"
 core_src="$REPO_ROOT/src/nnr"
 [ -d "$adapter_src" ] || fail "source directory not found: $adapter_src (run this script from the repository root)"
 [ -d "$core_src" ] || fail "core directory not found: $core_src"

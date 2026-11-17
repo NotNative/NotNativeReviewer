@@ -27,15 +27,23 @@
     Install to this directory instead of the resolved global config directory. The plugin
     is written to <Target>/plugins/<name>/.
 
+.PARAMETER Harness
+    Attach to this harness by name (for example -Harness opencode). Without it, the
+    installer proceeds directly when one adapter exists, and asks when several do.
+
 .EXAMPLE
     ./install.ps1
 
 .EXAMPLE
     ./install.ps1 -Target C:\Users\me\.config\opencode
+
+.EXAMPLE
+    ./install.ps1 -Harness opencode
 #>
 [CmdletBinding()]
 param(
-    [string]$Target
+    [string]$Target,
+    [string]$Harness
 )
 
 Set-StrictMode -Version Latest
@@ -49,8 +57,7 @@ function Fail([string]$Message) {
 }
 
 # Read one string field from a JSON manifest without assuming a formatting.
-function Read-ManifestField([string]$ManifestPath, [string]$Field) {
-    try {
+function Read-ManifestField([string]$ManifestPath, [string]$Field) {    try {
         $manifest = Get-Content -LiteralPath $ManifestPath -Raw | ConvertFrom-Json
     } catch {
         return $null
@@ -61,12 +68,11 @@ function Read-ManifestField([string]$ManifestPath, [string]$Field) {
     return $null
 }
 
-# Read the plugin name from the repository's hosts/opencode/plugin/package.json. The
-# repository is the single source of the name: install and uninstall read the same
-# field, so the plugin directory is derived from the repository and not from a second
-# hardcoded copy.
-function Get-RepoPluginName {
-    $repoManifest = Join-Path (Join-Path (Join-Path $RepoRoot 'hosts') 'opencode\plugin') 'package.json'
+# Read the plugin name from the selected adapter's package.json. The repository is the
+# single source of the name: install and uninstall read the same field, so the plugin
+# directory is derived from the repository and not from a second hardcoded copy.
+function Get-RepoPluginName([string]$AdapterSrc) {
+    $repoManifest = Join-Path $AdapterSrc 'package.json'
     if (-not (Test-Path -LiteralPath $repoManifest -PathType Leaf)) {
         Fail "cannot read the plugin name: $repoManifest is missing (run this script from the repository root)"
     }
@@ -127,20 +133,19 @@ function Resolve-ConfigDir {
     return @{ Path = (Join-Path $profilePath '.config\opencode'); Origin = 'default' }
 }
 
-function Assert-Source {
-    # Two source trees: the host adapter (hosts/opencode/plugin) and the core it loads
+function Assert-Source([string]$AdapterSrc) {
+    # Two source trees: the host adapter (hosts/<harness>/plugin) and the core it loads
     # (src/nnr). The adapter is what the host's loader reads; the core travels with it
     # as the nnr/ subdirectory of the installed plugin.
-    $pluginSrc = Join-Path $RepoRoot "hosts\opencode\plugin"
     $coreSrc = Join-Path $RepoRoot "src\nnr"
-    if (-not (Test-Path -LiteralPath $pluginSrc -PathType Container)) {
-        Fail "source directory not found: $pluginSrc (run this script from the repository root)"
+    if (-not (Test-Path -LiteralPath $AdapterSrc -PathType Container)) {
+        Fail "source directory not found: $AdapterSrc (run this script from the repository root)"
     }
     if (-not (Test-Path -LiteralPath $coreSrc -PathType Container)) {
         Fail "core directory not found: $coreSrc"
     }
     foreach ($required in @('package.json', 'index.js', 'core.js')) {
-        $path = Join-Path $pluginSrc $required
+        $path = Join-Path $AdapterSrc $required
         if (-not (Test-Path -LiteralPath $path -PathType Leaf)) {
             Fail "source file not found: $path"
         }
@@ -148,7 +153,7 @@ function Assert-Source {
     if (-not (Test-Path -LiteralPath (Join-Path $coreSrc 'version.js') -PathType Leaf)) {
         Fail "core file not found: $(Join-Path $coreSrc 'version.js')"
     }
-    return @($pluginSrc, $coreSrc)
+    return @($AdapterSrc, $coreSrc)
 }
 
 # List the files to install: every regular file in the adapter directory, and every
@@ -163,20 +168,79 @@ function Get-PluginSourceFiles($Dirs) {
             Fail "cannot list $dir : $($_.Exception.Message)"
         }
         foreach ($entry in $entries) {
-            $files += @{ File = $entry; Relative = if ($dir.EndsWith('nnr')) { "nnr/$($entry.Name)" } else { $entry.Name } }
+            $isCore = $dir -eq (Join-Path $RepoRoot 'src\nnr')
+            $files += @{ File = $entry; Relative = if ($isCore) { "nnr/$($entry.Name)" } else { $entry.Name } }
         }
     }
     if ($files.Count -eq 0) { Fail "the source directories hold no files" }
     return $files
 }
 
+# The hosts this repository can attach to. NNR is a parasite: it latches onto the
+# harness the user runs. A host is attachable when its adapter directory exists in the
+# repository; it is detected when the harness appears installed on this machine.
+# Detection is information, not a gate — a first install of a harness whose directories
+# do not exist yet is still legitimate.
+function Get-KnownHosts {
+    $userProfile = [Environment]::GetFolderPath('UserProfile')
+    @(
+        @{
+            Name = 'opencode'
+            Adapter = Join-Path $RepoRoot 'hosts\opencode\plugin'
+            Detect = [bool]($env:OPENCODE_CONFIG_DIR) -or
+                     (Test-Path (Join-Path $userProfile '.config\opencode')) -or
+                     ((Get-Command opencode -ErrorAction SilentlyContinue) -ne $null)
+        },
+        @{
+            Name = 'dsh'
+            Adapter = Join-Path $RepoRoot 'hosts\dsh\plugin'
+            Detect = [bool]($env:DSH_HOME) -or
+                     (Test-Path (Join-Path $userProfile '.dsh')) -or
+                     ((Get-Command dsh -ErrorAction SilentlyContinue) -ne $null)
+        }
+    )
+}
+
+# Choose the host to attach to. An explicit -Harness wins. With one attachable adapter
+# the installer proceeds without asking, so the common first-install stays
+# non-interactive. With several, the operator is shown what was detected and chooses.
+function Select-Host {
+    $known = @(Get-KnownHosts | Where-Object { Test-Path -LiteralPath $_.Adapter -PathType Container })
+    if ($known.Count -eq 0) {
+        Fail "no host adapter exists under hosts/ (run this script from the repository root)"
+    }
+    if ($Harness) {
+        $chosen = $known | Where-Object { $_.Name -eq $Harness }
+        if (-not $chosen) {
+            Fail "unknown harness '$Harness'; this repository can attach to: $($known.Name -join ', ')"
+        }
+        return $chosen
+    }
+    if ($known.Count -eq 1) { return $known[0] }
+
+    Write-Host "Attachable harnesses:"
+    for ($i = 0; $i -lt $known.Count; $i++) {
+        $state = if ($known[$i].Detect) { 'detected on this machine' } else { 'not detected on this machine' }
+        Write-Host ("  [{0}] {1}  ({2})" -f ($i + 1), $known[$i].Name, $state)
+    }
+    $answer = Read-Host "Select the harness to attach to [1-$($known.Count)]"
+    $index = 0
+    if (-not [int]::TryParse($answer, [ref]$index) -or $index -lt 1 -or $index -gt $known.Count) {
+        Fail "selection '$answer' is not one of 1..$($known.Count)"
+    }
+    return $known[$index - 1]
+}
+
 # --- Step 1: find the target -------------------------------------------------
 
-$PluginName = Get-RepoPluginName
+$SelectedHost = Select-Host
+$AdapterSrc = $SelectedHost.Adapter
+$PluginName = Get-RepoPluginName $AdapterSrc
 
 Write-Host "NotNativeReviewer installer"
 Write-Host ""
-Write-Host "plugin name      : $PluginName   (from hosts/opencode/plugin/package.json)"
+Write-Host "attaching to     : $($SelectedHost.Name)   (adapter: hosts/$($SelectedHost.Name)/plugin)"
+Write-Host "plugin name      : $PluginName   (from the adapter package.json)"
 Write-Host ""
 
 if ($Target) {
@@ -198,7 +262,7 @@ Write-Host ""
 
 # --- Step 2: check the source ------------------------------------------------
 
-$pluginSrcDirs = Assert-Source
+$pluginSrcDirs = Assert-Source $AdapterSrc
 $sourceFiles = Get-PluginSourceFiles $pluginSrcDirs
 Write-Host "step 2/5  source checked: $($pluginSrcDirs -join ', ') ($($sourceFiles.Count) file(s))"
 Write-Host ""

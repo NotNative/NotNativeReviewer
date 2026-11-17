@@ -1,0 +1,52 @@
+{
+  "name": "notnativereviewer",
+  "version": "20261117-8",
+  "description": "Turn-scoped tool-use permission reviewer for OpenCode. Reviews tool calls at the permission evaluate hook against the user's intent.",
+  "type": "module",
+  "main": "index.js",
+  "exports": {
+    ".": "./index.js"
+  },
+  "files": [
+    "index.js",
+    "hooks.js",
+    "core.js",
+    "probe.js",
+    "nnr/nnr.env",
+    "nnr/bytes.js",
+    "nnr/dedupe.js",
+    "nnr/evaluate.js",
+    "nnr/files.js",
+    "nnr/floor.js",
+    "nnr/grammar.js",
+    "nnr/ledger.js",
+    "nnr/observation.js",
+    "nnr/package.js",
+    "nnr/parent-link.js",
+    "nnr/payload.js",
+    "nnr/questions.js",
+    "nnr/read-grammar.js",
+    "nnr/reviewer.js",
+    "nnr/settings.js",
+    "nnr/state.js",
+    "nnr/telemetry.js",
+    "nnr/version.js"
+  ],
+  "keywords": [
+    "notnative",
+    "opencode",
+    "opencode-plugin",
+    "permissions",
+    "prompt-injection",
+    "reviewer"
+  ],
+  "license": "MIT",
+  "peerDependencies": {
+    "@opencode/plugin": ">=2.3.0 <3.0.0"
+  },
+  "peerDependenciesMeta": {
+    "@opencode/plugin": {
+      "optional": true
+    }
+  }
+}

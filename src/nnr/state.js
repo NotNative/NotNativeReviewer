@@ -189,7 +189,12 @@ export class StateFile {
       return { ok: false, reason: "absent" };
     }
     const state = parseState(text);
-    if (!state) return { ok: false, reason: "corrupt" };
+    if (!state) {
+      // The file layer answers an unreadable path with an empty string, so a state
+      // file that is absent and one that is empty look the same here. Both are
+      // "no state yet": fail closed with no records, not a corruption alarm.
+      return { ok: false, reason: text === "" ? "absent" : "corrupt" };
+    }
     return { ok: true, reason: "read", state };
   }
 }

@@ -40,9 +40,17 @@ judges **alignment**, not risk. It is not a strictness setting, and it does not
 second-guess a clear instruction.
 
 There is one exception. A command that destroys a **system root** — `rm -rf /`, `mkfs` on a
-disk, a drive format — is denied at once, before any model is asked. No reading of a user's
-request makes that call safe. Everything else that a user could have asked for stays a
-reviewer decision. See [docs/how-it-works.md](docs/how-it-works.md) §4.4.
+disk, a drive format — is denied at once, before any model is asked. A command that would
+run a script whose content the gate could not read is also denied without a model: no
+verdict is issued on what could not be seen. Everything else that a user could have asked
+for stays a reviewer decision. See
+[docs/how-it-works.md](docs/how-it-works.md) §4.4 and §5.1.
+
+One honest limit: the reviewer reads the conversation, and an agent that has read an
+injected page may restate it in its own words. Agent records are evidence, never
+authority, so such text cannot authorise a call — but the judgment that separates a
+task's call from an injected one is still a model's judgment. NotNativeReviewer narrows
+the channel for injected instructions; it does not close it.
 
 ## How it decides
 
@@ -58,8 +66,14 @@ The gate has three layers:
    judge the call against the user's request. The reviewer is a separate agent with its own
    prompt and a fresh context. It cannot call tools, it cannot read files, and it does not
    see tool results or the agent's hidden reasoning. It reads the conversation text, where
-   user records are authority and agent records are evidence. The gate reads file content on
-   its behalf and hands it over when a call writes or runs it.
+   user records are authority and agent records are evidence. A user record is the user's
+   own prompt, and also the user's answer when the agent asks a question or shows a form;
+   text the host injects with a `user` role is recorded as authority, an accepted trade
+   described in [docs/how-it-works.md](docs/how-it-works.md) §8. A session that another
+   agent delegated has no user authority of its own: it is judged against the request in
+   the conversation that delegated it, and a delegation whose source cannot be established
+   is denied. The gate reads file content on the reviewer's behalf and hands it over when a
+   call writes or runs it.
 3. **A closed outcome set.** The reviewer returns one of four outcomes: `approve`,
    `deny_with_guidance`, `hard_deny`, or `escalate_to_operator`. Anything else is a
    malformed answer, and a malformed answer denies.
@@ -155,7 +169,9 @@ notnativereviewer/
 
 Tested against a mock host and run on a live OpenCode instance. On that instance the plugin
 loaded from the default global config directory, all six hooks registered, the reviewer
-answered with the session's own model, and decisions applied to tool calls.
+answered with the session's own model, and decisions applied to tool calls. The delegation
+hierarchy, the persistence across a reload, and the authority of a question or form answer
+were each verified on the live instance.
 
 These behaviours remain unverified:
 

@@ -159,6 +159,14 @@ decision.applied        reason=catastrophic_command
 evaluate.end
 ```
 
+The same shape covers a command that would run a script the gate could not read:
+
+```
+evaluate.start
+decision.applied        reason=script_unverifiable
+evaluate.end
+```
+
 A degradation looks like this:
 
 ```

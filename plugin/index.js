@@ -290,7 +290,8 @@ export const setup = async (ctx, options = {}) => {
     data: { gate: "active", note: "hooks registered; the gate denies a call when the reviewer cannot decide" },
   });
 
-  ctx.notnativereviewer = { telemetry, stores };
+  // Exposed for a diagnostic: the gate's own record of the host context, not a public API.
+  ctx.notnativereviewer = { telemetry, stores, context: ctx };
   return undefined;
 };
 

@@ -15,15 +15,8 @@ export async function registerProbe(ctx, telemetry) {
   if (!ctx) return;
   dumpSurface(ctx, telemetry);
 
-  // The host's session.get expects an object (§5.4). Each plausible shape is one attempt,
-  // and a success is dumped two levels deep, so the record's own fields answer whether a
-  // parent id is on it. Nothing is inferred; the record says so or it does not.
-  const directory = ctx.location && ctx.location.directory;
-  const id = processSessionID();
-  for (const shape of [{ sessionID: id }, { id }, { path: { id } }, { sessionID: id, directory }]) {
-    const name = `session.get.${Object.keys(shape).join(".")}`;
-    await probeCall(ctx, telemetry, name, async () => ctx.session.get(shape));
-  }
+  // The session.get shape question is answered (§5.4): the host takes `{sessionID}`, and
+  // `ensureDelegation` calls it directly. No probe of the call is needed any more.
 
   // The hook-native path (§5.4): the prompt hook already receives every session's first
   // input, including a subagent's. If the host attaches the parent anywhere, it is on that

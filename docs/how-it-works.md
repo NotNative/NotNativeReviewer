@@ -396,13 +396,15 @@ not the user's instruction, so the gate gives a delegated session two layers:
 | Primary | The conversation that delegated the session, captured when the link is known | The user's own request. Highest authority |
 | Delegated | The task text in the subagent's session, and that agent's own text | Subordinate. It can carry out the primary conversation, never extend it |
 
-The gate tries two sources for the link: `session.created`, which carries the session's
-`parentID`, and one host-client lookup when the session's first prompt arrives. On the host
-tested on 2026-11-16 neither delivered it: a live subagent session recorded its own prompt
-with no parent, while the harness database held the correct `parent_id`. Until a working
-source is added, a delegated session is reviewed as a top-level one, and its task text
-carries the user's authority. §8 records that limit. A prompt recorded before a late link is
-reclassified as delegated, so an event race cannot leave agent text holding user authority.
+The gate reads the link from the host's own session surface: `ctx.session.get({sessionID})`
+returns the child's record, and the record carries its `parentID`. One read, when the child's
+first prompt arrives, and the hierarchy is in force from the first call. The SDK client is a
+fallback with the same record under a different path. The prompt hook's own event carries no
+parent, and `session.created` does not fire for a child on this host, so the record is the
+source that works; `delegation.observed` names it as `via: "context"`. A lookup that fails
+leaves the session top-level, which is the behaviour of a session the user opened directly. A
+prompt recorded before a late link is reclassified as delegated, so an event race cannot
+leave agent text holding user authority.
 
 The reviewer receives both layers, with the policy that the delegated task cannot override
 the primary conversation, and that a conflict is a denial. The gate also enforces the
@@ -589,11 +591,11 @@ These are limits of the host hooks, not defects that a later version can remove:
   readers — a pipe into `bash`, a pager, a redirect, a substitution, or a verb the list does
   not hold — reaches review, where it can be denied. The floor can prove the listed form and
   cannot prove the rest, and it accepts that cost to keep the read exception narrow.
-- **A host may keep a session's parent to itself.** The harness can know that a subagent
-  belongs to a parent, and store it, without exposing it to a plugin. When neither
-  `session.created` nor the client lookup provides the link, the child is reviewed as a
-  top-level session and its task text carries the user's authority. A `delegation.observed`
-  record is the sign that the link was found.
+- **A host may keep a session's parent to itself.** The harness knows a subagent's parent and
+  stores it, and the gate reads it from the session record (`via: "context"` in the log). A
+  host that exposes neither the record nor the client leaves the link unknown, and the child
+  is then reviewed as a top-level session. The prompt hook's event carries no parent on this
+  host, so the record is the one source that works here.
 - **Restored authority has no clock of its own.** After a reload the gate restores what the
   user said, and that stays valid until the user speaks again (§5.6). An operator can add a
   clock with `NNR_STATE_TTL_MINUTES`, but by default a conversation from yesterday still

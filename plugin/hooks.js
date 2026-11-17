@@ -11,6 +11,7 @@
 import { digest, STEP } from "./telemetry.js";
 import { runEvaluation } from "./evaluate.js";
 import { recordWriteDigest } from "./ledger.js";
+import { readParentID } from "./parent-link.js";
 import { TRUST } from "./package.js";
 import { recordQuestionReply, recordRenderAnswer } from "./questions.js";
 
@@ -162,10 +163,9 @@ export function registerPrompt(ctx, deps) {
 /**
  * Learn whether this session was delegated, before its first prompt is recorded.
  *
- * The event stream is the primary source (`session.created` carries `parentID`). This is the
- * fallback for a host that does not deliver that event to plugins: one client lookup per new
- * session, and none afterwards. A failed lookup leaves the session top-level, which is the
- * behaviour of a session the user opened directly.
+ * The parent id comes from a read of one session record, never inference (§5.4). A failed
+ * lookup leaves the session top-level, which is the behaviour of a session the user opened
+ * directly.
  *
  * @param {object} ctx the host context
  * @param {object} deps the gate dependencies
@@ -177,28 +177,14 @@ async function ensureDelegation(ctx, deps, sessionID) {
   if (typeof packages.isDelegated === "function" && packages.isDelegated(sessionID)) return;
   // Only a session with no records yet can be a fresh child, so this runs once per session.
   if (packages.summarise(sessionID).records > 0) return;
-  const parentID = await readParentID(ctx, sessionID);
+  const { parentID, via } = await readParentID(ctx, sessionID);
   if (!parentID) return;
   const result = packages.linkParent(sessionID, parentID);
   if (result.linked) {
     deps.telemetry.record(STEP.DELEGATION_OBSERVED, {
       sessionID,
-      data: { inherited: result.inherited, via: "client" },
+      data: { inherited: result.inherited, via },
     });
-  }
-}
-
-/** Read a session's parent id from the host client, or null. */
-async function readParentID(ctx, sessionID) {
-  try {
-    const client = ctx && ctx.client;
-    if (!client || !client.session || typeof client.session.get !== "function") return null;
-    const reply = await client.session.get({ path: { id: sessionID } });
-    const info = reply && (reply.data || reply);
-    const parentID = info && info.parentID;
-    return typeof parentID === "string" && parentID !== "" ? parentID : null;
-  } catch {
-    return null;
   }
 }
 

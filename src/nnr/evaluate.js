@@ -97,7 +97,11 @@ export async function runEvaluation(input) {
   } catch (error) {
     const decision = buildFailureDecision(FAILURE_REASON.REVIEWER_UNAVAILABLE, errorName(error));
     if (settle) settle({ effect: "deny", message: decision.message, reason: decision.reason_code });
-    telemetry.record(STEP.FAIL_CLOSED, { sessionID, ok: false, data: { reason: decision.reason_code, errorName: errorName(error) } });
+    telemetry.record(STEP.FAIL_CLOSED, {
+      sessionID,
+      ok: false,
+      data: { reason: decision.reason_code, errorName: errorName(error), message: String(error && error.message || "") },
+    });
     return { effect: "deny", message: decision.message, reason: decision.reason_code };
   }
 }

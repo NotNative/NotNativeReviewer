@@ -21,6 +21,9 @@ const { runEvaluation } = core.evaluate;
 /** The shell tools whose `command` argument becomes the gate event's resource. */
 const SHELL_TOOLS = new Set(["bash", "pwsh"]);
 
+/** The file-writing tools whose path argument becomes the gate event's resource. */
+const WRITE_TOOLS = new Set(["write", "edit", "multiedit", "patch"]);
+
 /**
  * The gate event for one DSH execution.
  *
@@ -33,12 +36,18 @@ const SHELL_TOOLS = new Set(["bash", "pwsh"]);
  */
 export function toGateEvent(exec) {
   const args = exec && exec.arguments && typeof exec.arguments === "object" ? exec.arguments : {};
-  const resource = SHELL_TOOLS.has(exec && exec.name) && typeof args.command === "string"
-    ? args.command
-    : JSON.stringify(args);
+  const name = String((exec && exec.name) || "");
+  let resource = JSON.stringify(args);
+  if (SHELL_TOOLS.has(name) && typeof args.command === "string") {
+    resource = args.command;
+  } else if (WRITE_TOOLS.has(name)) {
+    const path = typeof args.path === "string" ? args.path
+      : typeof args.file_path === "string" ? args.file_path : "";
+    if (path !== "") resource = path;
+  }
   return {
     sessionID: sessionIdOf(exec),
-    action: String((exec && exec.name) || ""),
+    action: name,
     resources: [resource],
     // DSH's pre-execute carries no host decision; the gate is the only one.
     effect: "allow",
@@ -95,6 +104,10 @@ export async function reviewExecution(exec, deps) {
     options: deps.options,
     seen: deps.seen,
     fileLayer: deps.fileLayer,
+    // The read-before-write ledger and the payload reader answer file questions
+    // through these; without them a floor-safe read would throw mid-pass.
+    readFileDigest: (path) => deps.fileLayer.digest(path),
+    readFileText: (path) => deps.fileLayer.readText(path),
   });
   return toPreToolDecision(result);
 }

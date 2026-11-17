@@ -205,7 +205,13 @@ function Get-KnownHosts {
 # the installer proceeds without asking, so the common first-install stays
 # non-interactive. With several, the operator is shown what was detected and chooses.
 function Select-Host {
-    $known = @(Get-KnownHosts | Where-Object { Test-Path -LiteralPath $_.Adapter -PathType Container })
+    # An adapter is attachable when it is complete: a directory with a package.json.
+    # A pending adapter (such as hosts/dsh before its first build) is registered but
+    # not offered, so the selection never offers an attachment that cannot load.
+    $known = @(Get-KnownHosts | Where-Object {
+        (Test-Path -LiteralPath $_.Adapter -PathType Container) -and
+        (Test-Path -LiteralPath (Join-Path $_.Adapter 'package.json') -PathType Leaf)
+    })
     if ($known.Count -eq 0) {
         Fail "no host adapter exists under hosts/ (run this script from the repository root)"
     }

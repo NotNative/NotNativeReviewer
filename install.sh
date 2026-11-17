@@ -123,7 +123,9 @@ done
 known_hosts() {
     for name in opencode dsh; do
         adapter="$REPO_ROOT/hosts/$name/plugin"
-        [ -d "$adapter" ] || continue
+        # An adapter is attachable when it is complete: a directory with a
+        # package.json. A pending adapter is registered but not offered.
+        [ -f "$adapter/package.json" ] || continue
         case "$name" in
             opencode) detected=0
                 [ -n "$(non_empty_env OPENCODE_CONFIG_DIR)" ] && detected=1

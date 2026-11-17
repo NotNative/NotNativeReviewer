@@ -59,6 +59,7 @@ export const FAILURE_REASON = Object.freeze({
   PRIMARY_UNAVAILABLE: "primary_unavailable",
   WRITE_UNREAD: "write_unread",
   WRITE_STALE: "write_stale",
+  SCRIPT_UNVERIFIABLE: "script_unverifiable",
   CATASTROPHIC_COMMAND: "catastrophic_command",
 });
 
@@ -402,6 +403,8 @@ function failureMessage(reasonCode, detail) {
       return "This call changes a file that the conversation has not read. Read it first, then retry.";
     case FAILURE_REASON.WRITE_STALE:
       return "The file changed after the conversation read it. Read it again, then retry.";
+    case FAILURE_REASON.SCRIPT_UNVERIFIABLE:
+      return `NotNativeReviewer could not read the script this command would run (${detail || "unreadable script path"}), so what it would execute is unknown. No model decided this. State the step as plain commands, or show the script's content in the command.`;
     case FAILURE_REASON.CATASTROPHIC_COMMAND:
       return `NotNativeReviewer blocked this command: it would destroy a system root (${detail || "catastrophic target"}). No model decided this. Ask the user to confirm, and never run it on their behalf.`;
     default:

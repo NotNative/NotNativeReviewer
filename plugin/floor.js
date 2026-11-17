@@ -231,18 +231,40 @@ export function readTargetPaths(call) {
  * extension, or a leading `./`. Flags and quoted strings are kept, because a path may
  * contain a space.
  *
+ * Two shapes that look like paths but never name one are skipped, because a compound
+ * command fills the three-file cap with them before it reaches the real script:
+ *
+ * - A token starting with `$` is a variable reference or assignment (`$s\run.ps1`,
+ *   `$s=C:\dir`); the file it names is known only at run time.
+ * - A token with more than one colon is a remote spec (`jack:C:/Users/Public/x.ps1`); a
+ *   Windows drive is one colon.
+ *
  * @param {string} command
  * @returns {readonly string[]} candidate paths, in the order they appear
  */
 export function readScriptPaths(command) {
   if (typeof command !== "string" || command.length === 0) return [];
   const paths = [];
-  for (const token of tokeniseCommand(command)) {
-    if (token === "" || token.startsWith("-")) continue;
+  const consider = (token) => {
+    if (token === "" || token.startsWith("-") || token.startsWith("$")) return;
+    // A remote spec (`jack:C:/Users/Public/x.ps1`) is two colons; a Windows drive is one.
+    if ((token.match(/:/g) || []).length > 1) return;
     if (looksLikePath(token) && !paths.includes(token)) paths.push(token);
+  };
+  for (const token of tokeniseCommand(command)) {
+    consider(token);
+    // A quoted compound command arrives as one token, and the script it names sits inside
+    // it. The parts are candidates too; the whole token stays a candidate, so a path with
+    // a space in it survives.
+    if (token.includes(" ")) for (const part of token.split(/\s+/)) consider(part);
   }
   // A script usually appears before its arguments, and the cap keeps the request small.
   return paths.slice(0, 3);
+}
+
+/** Whether a path names a script, which the gate must read before the command runs it. */
+export function isScriptPath(path) {
+  return typeof path === "string" && SCRIPT_EXTENSION.test(path);
 }
 
 /**

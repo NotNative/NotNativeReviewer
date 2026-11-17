@@ -10,7 +10,7 @@
  */
 
 import { byteLength, trimToBytes, budgetText } from "./bytes.js";
-import { readCommandBase, readScriptPaths } from "./floor.js";
+import { isScriptPath, readCommandBase, readScriptPaths } from "./floor.js";
 
 /**
  * Read the file content for this call, so the reviewer judges content and not a path
@@ -45,6 +45,41 @@ export async function readPayloadExcerpt(input, event, targetPaths) {
     return isShell ? `command: ${command}\n(file content unavailable: the gate could not read ${paths.join(", ")})` : "";
   }
   return budgetText(parts.join("\n\n"), payloadBytes).text;
+}
+
+/**
+ * The script files a command names that the gate could not read (§5.1).
+ *
+ * A command that would run a script the gate cannot see is not reviewable: the reviewer
+ * would be judging an invocation, not a behaviour. The caller denies such a call without
+ * a model, so "content unavailable" can never be approved by a drift in judgement.
+ *
+ * @returns {Promise<string[]>} the script paths that could not be read
+ */
+export async function unreadableScripts(input, event, targetPaths) {
+  if (!isShellAction(event && event.action)) return [];
+  const command = String(targetPaths[0] || "");
+  if (command === "") return [];
+  const base = readCommandBase(command);
+  // A wildcard names many files and names no file; a command that carries one reaches the
+  // reviewer with its command text, not as an unreadable script.
+  const scripts = readScriptPaths(command)
+    .filter((path) => !path.includes("*"))
+    .filter((path) => !samePath(path, base))
+    .filter(isScriptPath);
+  const unreadable = [];
+  for (const path of scripts) {
+    let readable = false;
+    for (const candidate of candidatePaths(path, base)) {
+      const text = await readOneFile(input, candidate, 256);
+      if (text !== "") {
+        readable = true;
+        break;
+      }
+    }
+    if (!readable) unreadable.push(path);
+  }
+  return unreadable;
 }
 
 /**

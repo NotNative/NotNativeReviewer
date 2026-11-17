@@ -324,6 +324,21 @@ command itself, and the gate treats it that way:
    unavailable. An empty section would read as "nothing here", and a reviewer that cannot
    see a file will deny a call that it simply could not read.
 
+That condition is now a deterministic deny, and it stays even though the gate could often
+guess: a script the session wrote moments ago is in the read ledger, and a bare filename in
+the command could be matched against it. The gate does not guess where a script lives,
+because a script that runs on a remote host is exactly the call where a wrong guess is
+invisible. When a command names a script the gate cannot read, the call is denied without a
+model (`script_unverifiable`), and the message says the two ways through: state the step as
+plain, individually visible commands, or name the script by a path the gate can read. The
+cost is a turn or two; the property is that no verdict on an unreadable script is ever
+issued, by a model or by anything else.
+
+Extraction itself stays honest about compound commands. A token that begins with `$` is a
+variable, and a token with two colons is a remote `host:path` spec; both are skipped. A
+quoted compound command arrives as one token, so its whitespace-separated parts are
+candidates too, and the interpreter's argument — the real script — is among them.
+
 This last point matters more than it looks. A file whose name does not repeat the words of
 the request looks unrelated on its name alone: a call deleting `src/update-platform.js`
 looks unexplained by a request about the "desktop surface". The link is inside the file,
@@ -364,9 +379,13 @@ the proposal it answers, so the gate never separates the user's lines from the a
 
 ### 5.3 The package is created by user input, and only by user input
 
-A package exists because the user spoke. A prompt or a question or page answer creates it.
-Agent text only appends to a package that already exists; a transcript made only of agent
-text carries no authority and is not reviewable.
+A package exists because the user spoke. Three paths record that speech, and the role flags
+on the messages decide it: a typed prompt (`session.prompt`), a question or page answer, and
+— since the host hands the gate the whole message list before every model request — any
+`user`-role message in that list (§4.2.1). The third path is what makes a card answer count:
+it reaches the model through the context hook, never the prompt hook, and the role flag is
+what makes it the user's words. Agent text only appends to a package that already exists; a
+transcript made only of agent text carries no authority and is not reviewable.
 
 Nothing in the host event stream removes a package. An idle parent, a finished subagent, or
 a reconnecting client must not delete the evidence behind a live call, because the call it
@@ -596,6 +615,12 @@ These are limits of the host hooks, not defects that a later version can remove:
   host that exposes neither the record nor the client leaves the link unknown, and the child
   is then reviewed as a top-level session. The prompt hook's event carries no parent on this
   host, so the record is the one source that works here.
+- **The role flag is the only label the gate reads.** The context hook records a `user`-role
+  message as user input (§5.3), and the host's role is the whole check. If the harness ever
+  injects text as a `user`-role message — synthetic context, a compaction note — the gate
+  will treat it as the user's authority, because the gate reviews exactly the conversation
+  the model sees. This is an accepted trade: the alternative is to drop the role flag and
+  with it every answer that reaches the model by any path but a typed prompt.
 - **Restored authority has no clock of its own.** After a reload the gate restores what the
   user said, and that stays valid until the user speaks again (§5.6). An operator can add a
   clock with `NNR_STATE_TTL_MINUTES`, but by default a conversation from yesterday still

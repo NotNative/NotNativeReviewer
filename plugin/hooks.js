@@ -1,9 +1,9 @@
 /**
- * Hooks — the registration functions for each host hook point.
+ * Hooks — registration for each host hook point.
  *
- * Each function returns true when the host provided the hook and the gate registered on
- * it, and false when the host did not. A false result is a visible degradation: the gate
- * records it, and the host surface shows the gate as partially ungoverned.
+ * Each function returns true when the host provided the hook and the gate registered on it,
+ * and false when it did not. A false result is a visible degradation: the gate records it,
+ * and the host surface shows the gate as partially ungoverned.
  *
  * Imports only sibling modules.
  */
@@ -93,10 +93,8 @@ export function registerEvaluate(ctx, deps) {
 }
 
 /**
- * Write a gate result onto the host event.
- *
- * A deny always applies. An allow or ask applies only when it is at least as strict as
- * the host decision, so the gate cannot loosen a decision the configuration made.
+ * Write a gate result onto the host event. A deny always applies. An allow or ask applies
+ * only when it is at least as strict as the host decision, so the gate cannot loosen one.
  */
 function applyToEvent(event, result) {
   if (!event || !result) return;
@@ -189,9 +187,12 @@ async function ensureDelegation(ctx, deps, sessionID) {
 }
 
 /**
- * Register the context hook. The hook runs before each agent-loop model request. The
- * gate records agent text as `model_utterance`, which is evidence and never authority
- * (§2.1, §5.2). The message's own time keeps the transcript in conversation order.
+ * Register the context hook. The hook runs before each agent-loop model request.
+ *
+ * The gate records both sides by role (§5.3): `assistant` as `model_utterance`, evidence and
+ * never authority; `user` as user input, which is authority. The role flags separate the two,
+ * so an answer that reaches the model by any path — typed prompt, card answer, question
+ * reply — anchors the package even when no prompt hook fired for it.
  */
 export function registerContext(ctx, deps) {
   if (!ctx.session || typeof ctx.session.hook !== "function") return false;
@@ -204,13 +205,25 @@ export function registerContext(ctx, deps) {
     rememberSessionModel(deps, sessionID, event.model);
     let recorded = 0;
     for (const message of messages) {
-      if (!message || message.role !== "assistant") continue;
-      const messageID = message.id || message.messageID;
-      if (!messageID) continue;
-      const text = readMessageText(message);
-      if (!text) continue;
-      const at = message.time && Number.isFinite(message.time.created) ? message.time.created : Date.now();
-      if (deps.stores.packages.recordText({ sessionID, id: messageID, text, trust: TRUST.MODEL_UTTERANCE, at })) recorded += 1;
+      if (!message || typeof message.role !== "string") continue;
+      if (message.role === "assistant") {
+        const messageID = message.id || message.messageID;
+        if (!messageID) continue;
+        const text = readMessageText(message);
+        if (!text) continue;
+        const at = readMessageTime(message);
+        if (deps.stores.packages.recordText({ sessionID, id: messageID, text, trust: TRUST.MODEL_UTTERANCE, at })) recorded += 1;
+        continue;
+      }
+      if (message.role === "user") {
+        const text = readMessageText(message);
+        if (!text) continue;
+        // The host's id is the one the prompt hook would also see, so the same message is
+        // never recorded twice; a digest stands in when the host names nothing.
+        const messageID = message.id || message.messageID || `ctx:${digest(text)}`;
+        const at = readMessageTime(message);
+        if (deps.stores.packages.recordUserInput({ sessionID, id: messageID, text, at }).recorded) recorded += 1;
+      }
     }
     deps.telemetry.record(STEP.CONTEXT_OBSERVED, {
       sessionID,
@@ -221,7 +234,10 @@ export function registerContext(ctx, deps) {
   return true;
 }
 
-/**
+/** The time a message was created, or now. */
+function readMessageTime(message) {
+  return message.time && Number.isFinite(message.time.created) ? message.time.created : Date.now();
+}/**
  * Remember the model that this session is using (D-019).
  *
  * The host carries a ModelRef: `providerID`, `id`, and an optional `variant`. Keep only

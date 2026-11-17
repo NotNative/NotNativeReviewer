@@ -26,7 +26,7 @@ import {
 import { readValidAnchors } from "./package.js";
 import { checkWriteInvariant, recordReads } from "./ledger.js";
 import { callKey } from "./dedupe.js";
-import { readPayloadExcerpt, readShellCommand } from "./payload.js";
+import { readPayloadExcerpt, readShellCommand, unreadableScripts } from "./payload.js";
 import { buildReviewerRequest, callReviewer, REVIEW_DEADLINE_MS } from "./reviewer.js";
 import { STEP } from "./telemetry.js";
 
@@ -131,6 +131,14 @@ async function evaluateCall(input) {
   if (writeCheck.denied) {
     const decision = buildFailureDecision(writeCheck.reason);
     return applyDeny(event, telemetry, sessionID, decision, writeCheck.reason);
+  }
+
+  // A command that would run a script the gate cannot read is not reviewable (§5.1). The
+  // deny is deterministic, so "content unavailable" can never be approved by drift.
+  const scripts = await unreadableScripts(input, event, targetPaths);
+  if (scripts.length > 0) {
+    const decision = buildFailureDecision(FAILURE_REASON.SCRIPT_UNVERIFIABLE, scripts.join(", "));
+    return applyDeny(event, telemetry, sessionID, decision, FAILURE_REASON.SCRIPT_UNVERIFIABLE);
   }
 
   const projection = await buildProjection(input, event, targetPaths, classification);

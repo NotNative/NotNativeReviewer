@@ -253,6 +253,9 @@ export const setup = async (ctx, options = {}) => {
       postureSource: postures.source,
       settingsErrors: postures.errors.length,
       postureConflict: Boolean(settings.forceDeny && settings.forceAllow),
+      // A probe of the link surface (§5.4): which places a plugin can ask about a session's
+      // parent actually exist on this host. Recorded once, at setup.
+      linkSurface: describeLinkSurface(ctx),
     },
   });
 
@@ -290,6 +293,32 @@ export const setup = async (ctx, options = {}) => {
   ctx.notnativereviewer = { telemetry, stores };
   return undefined;
 };
+
+/**
+ * Describe the host surfaces that could name a session's parent (§5.4).
+ *
+ * A plugin is given `ctx`, and the question "which of these can tell me a session's parent?"
+ * has to be answered from what is actually present, not from the documentation. This probe
+ * names the presence of each surface so the log shows which ones a build can try. It never
+ * calls the host, so it cannot slow setup or fail.
+ *
+ * @param {object} ctx the host context
+ * @returns {string}
+ */
+function describeLinkSurface(ctx) {
+  const has = (object, key) => Boolean(object && typeof object[key] === "function");
+  const client = ctx && ctx.client;
+  const session = client && client.session;
+  const hooks = ctx && ctx.session && typeof ctx.session.hook === "function";
+  const event = ctx && ctx.event && typeof ctx.event.subscribe === "function";
+  const surfaces = [];
+  if (has(session, "get")) surfaces.push("client.session.get");
+  if (has(session, "list")) surfaces.push("client.session.list");
+  if (has(session, "messages")) surfaces.push("client.session.messages");
+  if (hooks) surfaces.push("session.hook");
+  if (event) surfaces.push("event.subscribe");
+  return surfaces.length === 0 ? "none" : surfaces.join(",");
+}
 
 /** Whether the host can make a reviewer call. */
 function pickGenerate(ctx) {

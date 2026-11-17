@@ -280,7 +280,10 @@ function Get-NNRHome {
 # dsh.profile.bundles, and a junction into the profile's node_modules. The profile
 # loads every named bundle on its next start, so no launch flags are needed.
 function Attach-Dsh([string]$PackageDir, [string]$ProfileName) {
-    $dsh = Get-Command dsh -ErrorAction SilentlyContinue
+    # A profile the Electron application manages exclusively refuses the CLI, so the
+    # manifest is edited directly for it — the same two records the CLI would write.
+    # The manual path is the general fallback too, for a machine with no dsh on PATH.
+    $dsh = if ($ProfileName -eq 'desktop') { $null } else { Get-Command dsh -ErrorAction SilentlyContinue }
     if ($dsh) {
         Write-Host "step 4/5  attaching with the dsh CLI (profile $ProfileName)"
         & dsh plugin --profile $ProfileName add $PackageDir
@@ -312,10 +315,30 @@ function Attach-Dsh([string]$PackageDir, [string]$ProfileName) {
         }
         $manifest | Add-Member -NotePropertyName dependencies -NotePropertyValue ([pscustomobject]@{}) -Force
         $manifest.dependencies | Add-Member -NotePropertyName $PluginName -NotePropertyValue "file:$PackageDir" -Force
-        $manifest | Add-Member -NotePropertyName dsh -NotePropertyValue ([pscustomobject]@{ profile = [pscustomobject]@{ bundles = @() } }) -Force
-        $bundles = @($manifest.dsh.profile.bundles) + @($PluginName) | Select-Object -Unique
+        # Merge, never replace: the profile's existing bundles are the harness's own
+        # layers, and removing them would break the app that owns the profile. The
+        # existing list is read BEFORE any member is (re)added below.
+        $existingBundles = @()
+        if (($manifest.PSObject.Properties.Name -contains 'dsh') -and $manifest.dsh -and $manifest.dsh.profile) {
+            $existingBundles = if ($manifest.dsh.profile.bundles -is [array]) { @($manifest.dsh.profile.bundles) }
+                               elseif ($null -ne $manifest.dsh.profile.bundles) { @($manifest.dsh.profile.bundles) }
+                               else { @() }
+        }
+        if (-not ($manifest.PSObject.Properties.Name -contains 'dsh') -or -not $manifest.dsh) {
+            $manifest | Add-Member -NotePropertyName dsh -NotePropertyValue ([pscustomobject]@{ profile = [pscustomobject]@{ bundles = @() } }) -Force
+        }
+        $manifest.dsh | Add-Member -NotePropertyName profile -NotePropertyValue ([pscustomobject]@{}) -Force
+        $manifest.dsh.profile | Add-Member -NotePropertyName bundles -NotePropertyValue @() -Force
+        $bundles = @($existingBundles) + @($PluginName) | Select-Object -Unique
         $manifest.dsh.profile.bundles = $bundles
-        $manifest | ConvertTo-Json -Depth 10 | Set-Content -LiteralPath $manifestPath -Encoding UTF8
+        # PowerShell 5.1 collapses a single-element array to a scalar in
+        # ConvertTo-Json, and the profile loader reads bundles as an array. The
+        # array literal is therefore rebuilt by hand; a multi-element list already
+        # serializes as an array and the scalar pattern simply does not match.
+        $json = $manifest | ConvertTo-Json -Depth 10
+        $bundlesLiteral = '[' + (($bundles | ForEach-Object { '"' + ($_ -replace '"', '\"') + '"' }) -join ', ') + ']'
+        $json = $json -replace '("bundles"\s*:\s*)"[^"]*"', ('$1' + $bundlesLiteral)
+        [System.IO.File]::WriteAllText($manifestPath, $json)
     } catch {
         Fail "cannot edit the profile manifest $manifestPath : $($_.Exception.Message)"
     }

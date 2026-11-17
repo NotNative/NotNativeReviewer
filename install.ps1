@@ -274,80 +274,100 @@ function Get-NNRHome {
     return (Join-Path $base 'notnativereviewer')
 }
 
-# Attach the staged package to a DSH profile. The harness's own CLI is the path of
-# choice; when it is not on the PATH, the profile manifest is edited directly — the
-# same two records the CLI writes: the package in dependencies, the name in
-# dsh.profile.bundles, and a junction into the profile's node_modules. The profile
-# loads every named bundle on its next start, so no launch flags are needed.
+# Attach the staged package to a DSH profile.
+#
+# The desktop application manages its plugins in the profile's own patch layer,
+# cordis.patch.yml (observed live, 2026-11-17): insert rows with id, name, and
+# config, applied after every bundle layer. That is the attachment this installer
+# writes — one row for the adapter, its config filled from the profile's own
+# agent-default-model row when one exists, so the reviewer judges with the same
+# model the conversation uses. The package directory is junctioned into the
+# profile's node_modules so the row's module specifier resolves. No CLI and no
+# bundle-list entry: a bundle would load the plugin twice, and the Electron-managed
+# profile refuses the CLI anyway.
 function Attach-Dsh([string]$PackageDir, [string]$ProfileName) {
-    # A profile the Electron application manages exclusively refuses the CLI, so the
-    # manifest is edited directly for it — the same two records the CLI would write.
-    # The manual path is the general fallback too, for a machine with no dsh on PATH.
-    $dsh = if ($ProfileName -eq 'desktop') { $null } else { Get-Command dsh -ErrorAction SilentlyContinue }
-    if ($dsh) {
-        Write-Host "step 4/5  attaching with the dsh CLI (profile $ProfileName)"
-        & dsh plugin --profile $ProfileName add $PackageDir
-        if ($LASTEXITCODE -ne 0) {
-            Fail "the dsh CLI refused the attachment (exit $LASTEXITCODE); its message above names the reason"
-        }
-        return
-    }
-
-    Write-Host "step 4/5  no dsh CLI on PATH; editing the profile manifest directly"
+    Write-Host "step 4/5  attaching into the profile patch layer (profile $ProfileName)"
     $dshHome = $env:DSH_HOME
     if ([string]::IsNullOrWhiteSpace($dshHome)) {
         $profile = [Environment]::GetFolderPath('UserProfile')
         $dshHome = Join-Path $profile '.dsh'
     }
     $profileDir = Join-Path (Join-Path $dshHome 'profiles') $ProfileName
-    $manifestPath = Join-Path $profileDir 'package.json'
-    try {
-        if (Test-Path -LiteralPath $manifestPath -PathType Leaf) {
-            $manifest = Get-Content -LiteralPath $manifestPath -Raw | ConvertFrom-Json
-        } else {
-            New-Item -ItemType Directory -Path $profileDir -Force | Out-Null
-            $manifest = [pscustomobject]@{
-                name = "dsh-profile-$ProfileName"
-                private = $true
-                dependencies = [pscustomobject]@{}
-                dsh = [pscustomobject]@{ profile = [pscustomobject]@{ bundles = @() } }
-            }
-        }
-        $manifest | Add-Member -NotePropertyName dependencies -NotePropertyValue ([pscustomobject]@{}) -Force
-        $manifest.dependencies | Add-Member -NotePropertyName $PluginName -NotePropertyValue "file:$PackageDir" -Force
-        # Merge, never replace: the profile's existing bundles are the harness's own
-        # layers, and removing them would break the app that owns the profile. The
-        # existing list is read BEFORE any member is (re)added below.
-        $existingBundles = @()
-        if (($manifest.PSObject.Properties.Name -contains 'dsh') -and $manifest.dsh -and $manifest.dsh.profile) {
-            $existingBundles = if ($manifest.dsh.profile.bundles -is [array]) { @($manifest.dsh.profile.bundles) }
-                               elseif ($null -ne $manifest.dsh.profile.bundles) { @($manifest.dsh.profile.bundles) }
-                               else { @() }
-        }
-        if (-not ($manifest.PSObject.Properties.Name -contains 'dsh') -or -not $manifest.dsh) {
-            $manifest | Add-Member -NotePropertyName dsh -NotePropertyValue ([pscustomobject]@{ profile = [pscustomobject]@{ bundles = @() } }) -Force
-        }
-        $manifest.dsh | Add-Member -NotePropertyName profile -NotePropertyValue ([pscustomobject]@{}) -Force
-        $manifest.dsh.profile | Add-Member -NotePropertyName bundles -NotePropertyValue @() -Force
-        $bundles = @($existingBundles) + @($PluginName) | Select-Object -Unique
-        $manifest.dsh.profile.bundles = $bundles
-        # PowerShell 5.1 collapses a single-element array to a scalar in
-        # ConvertTo-Json, and the profile loader reads bundles as an array. The
-        # array literal is therefore rebuilt by hand; a multi-element list already
-        # serializes as an array and the scalar pattern simply does not match.
-        $json = $manifest | ConvertTo-Json -Depth 10
-        $bundlesLiteral = '[' + (($bundles | ForEach-Object { '"' + ($_ -replace '"', '\"') + '"' }) -join ', ') + ']'
-        $json = $json -replace '("bundles"\s*:\s*)"[^"]*"', ('$1' + $bundlesLiteral)
-        [System.IO.File]::WriteAllText($manifestPath, $json)
-    } catch {
-        Fail "cannot edit the profile manifest $manifestPath : $($_.Exception.Message)"
-    }
+    New-Item -ItemType Directory -Path $profileDir -Force | Out-Null
+
+    # 1. The junction: the row's module name resolves through the profile's
+    #    node_modules, which is where the loader looks.
     $linkDir = Join-Path (Join-Path $profileDir 'node_modules') $PluginName
     try {
         if (Test-Path -LiteralPath $linkDir) { Remove-Item -LiteralPath $linkDir -Force -Recurse }
         New-Item -ItemType Junction -Path $linkDir -Target $PackageDir | Out-Null
     } catch {
         Fail "cannot link $PackageDir into $linkDir : $($_.Exception.Message)"
+    }
+
+    # 2. Migrate an older attachment out of the bundle list, so the plugin loads
+    #    exactly once. The harness's own bundles are never touched.
+    $manifestPath = Join-Path $profileDir 'package.json'
+    if (Test-Path -LiteralPath $manifestPath -PathType Leaf) {
+        try {
+            $raw = Get-Content -LiteralPath $manifestPath -Raw
+            if ($raw -match '"bundles"') {
+                $manifest = $raw | ConvertFrom-Json
+                if ($manifest.dsh -and $manifest.dsh.profile) {
+                    $current = if ($manifest.dsh.profile.bundles -is [array]) { @($manifest.dsh.profile.bundles) }
+                               elseif ($null -ne $manifest.dsh.profile.bundles) { @($manifest.dsh.profile.bundles) }
+                               else { @() }
+                    $kept = @($current | Where-Object { $_ -ne $PluginName })
+                    if ($kept.Count -ne $current.Count) {
+                        $manifest.dsh.profile.bundles = $kept
+                        $json = $manifest | ConvertTo-Json -Depth 10
+                        $keptLiteral = '[' + (($kept | ForEach-Object { '"' + ($_ -replace '"', '\"') + '"' }) -join ', ') + ']'
+                        $json = $json -replace '("bundles"\s*:\s*)"[^"]*"', ('$1' + $keptLiteral)
+                        [System.IO.File]::WriteAllText($manifestPath, $json)
+                        Write-Host "          migrated out of the bundle list"
+                    }
+                }
+            }
+        } catch {
+            Fail "cannot clean the bundle list in $manifestPath : $($_.Exception.Message)"
+        }
+    }
+
+    # 3. The patch row. An existing row is left alone (the operator may have tuned
+    #    the config); a fresh row takes the profile's own default model, so the
+    #    reviewer judges with the model the conversation already uses.
+    $patchPath = Join-Path $profileDir 'cordis.patch.yml'
+    try {
+        $patch = if (Test-Path -LiteralPath $patchPath -PathType Leaf) { Get-Content -LiteralPath $patchPath -Raw } else { "" }
+        if ($patch -match '(?m)^-\s*id:\s*notnativereviewer\s*$') {
+            Write-Host "          the patch row already exists; config left as the operator set it"
+            return
+        }
+        $provider = ""
+        $model = ""
+        if ($patch -match '(?s)-\s*id:\s*agent-default-model\b.*?provider:\s*"?([^\r\n"]+?)"?\s*\r?\n\s*model:\s*"?([^\r\n"]+?)"?\s*\r?\n') {
+            $provider = $Matches[1].Trim()
+            $model = $Matches[2].Trim()
+        }
+        $row = @"
+
+# NotNativeReviewer (added by the NotNativeReviewer installer). The reviewer model
+# follows the profile's own default; edit it here to judge with a different model.
+- id: notnativereviewer
+  name: notnativereviewer
+  config:
+    provider: "$provider"
+    model: "$model"
+"@
+        $patch = $patch.TrimEnd() + "`r`n" + $row
+        [System.IO.File]::WriteAllText($patchPath, $patch)
+        if ($model -ne "") {
+            Write-Host "          reviewer model follows the profile default: $provider / $model"
+        } else {
+            Write-Host "          no profile default model found; the reviewer stays unconfigured (the operator decides consequential calls)"
+        }
+    } catch {
+        Fail "cannot edit the patch layer $patchPath : $($_.Exception.Message)"
     }
     Write-Host "          attached into $profileDir"
 }

@@ -340,7 +340,16 @@ function Attach-Dsh([string]$PackageDir, [string]$ProfileName) {
     try {
         $patch = if (Test-Path -LiteralPath $patchPath -PathType Leaf) { Get-Content -LiteralPath $patchPath -Raw } else { "" }
         if ($patch -match '(?m)^-\s*id:\s*notnativereviewer\s*$') {
-            Write-Host "          the patch row already exists; config left as the operator set it"
+            # An existing row is honoured, but an older one names the module by bare
+            # package name, which the embedded runtime cannot resolve; migrate it.
+            $fileUrl = "file:///" + ($PackageDir -replace '\\', '/') + "/index.js"
+            $migrated = $patch -replace '(?m)^(\s*name:\s*)notnativereviewer\s*$', ('$1' + $fileUrl)
+            if ($migrated -ne $patch) {
+                [System.IO.File]::WriteAllText($patchPath, $migrated)
+                Write-Host "          migrated the existing row to an absolute module path"
+            } else {
+                Write-Host "          the patch row already exists; config left as the operator set it"
+            }
             return
         }
         $provider = ""
@@ -349,12 +358,18 @@ function Attach-Dsh([string]$PackageDir, [string]$ProfileName) {
             $provider = $Matches[1].Trim()
             $model = $Matches[2].Trim()
         }
+        # The row's name is an absolute file URL, not a bare package name. The desktop
+        # application runs its harness inside the Electron process, and a bare name
+        # resolves from asar-internal node_modules, where the profile junction is
+        # unreachable (observed live: the row was silently skipped). A file URL needs
+        # no resolution anchor at all.
+        $fileUrl = "file:///" + ($PackageDir -replace '\\', '/') + "/index.js"
         $row = @"
 
 # NotNativeReviewer (added by the NotNativeReviewer installer). The reviewer model
 # follows the profile's own default; edit it here to judge with a different model.
 - id: notnativereviewer
-  name: notnativereviewer
+  name: $fileUrl
   config:
     provider: "$provider"
     model: "$model"

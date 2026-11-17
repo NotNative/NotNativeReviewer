@@ -270,7 +270,9 @@ export async function callReviewer(ctx, request, options = {}) {
   const onStep = options.onStep || (() => {});
   const started = Date.now();
 
-  const caller = pickGenerateCaller(ctx);
+  // An explicit caller wins: a host whose model transport is not OpenCode's
+  // generate.text supplies its own, and the request contract stays the same.
+  const caller = typeof options.caller === "function" ? options.caller : pickGenerateCaller(ctx);
   if (!caller) {
     return { ok: false, reason: "no_generate_text", ms: 0 };
   }

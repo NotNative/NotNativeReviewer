@@ -354,6 +354,7 @@ async function askOnce(input, projection, sessionID, isRepair) {
     deadlineMs: (input.options && input.options.deadlineMs) || REVIEW_DEADLINE_MS,
     sessionID,
     model,
+    caller: input.options && input.options.caller,
     onStep: (step, data) => telemetry.record(STEP.REVIEWER_ANSWERED, { sessionID, data: { sub: step, ...data } }),
   });
 

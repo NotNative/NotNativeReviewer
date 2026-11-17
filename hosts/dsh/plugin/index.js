@@ -2,25 +2,31 @@
  * NotNativeReviewer — tool-use permission reviewer for the DeepSeek Harness.
  *
  * Entrypoint for the DSH plugin loader: `name` and `apply(ctx, config)` (docs/user/
- * develop/basic/index.md). The core arrives through `core.js`, unchanged from the
- * OpenCode adapter's copy of the loader.
+ * develop/basic/index.md). The core arrives through `core.js`, and the evaluation
+ * through `gate.js`, which maps DSH's pre-execute waterfall onto the same pipeline the
+ * OpenCode adapter runs.
  *
- * Floor-first milestone (plan, multi-host architecture, step 3). The reviewer agent
- * call is not wired yet. What this build does:
+ * What this build does:
  *
  *   ctx.on('session/event')     records the user's own words as authority; an injected
  *                               user-role message (source.kind !== 'user') is refused,
  *                               which DSH makes possible because every producer stamps
  *                               its own source kind.
- *   ctx.on('tools/pre-execute') denies a catastrophe deterministically, without a
- *                               model, and sends every other call to the operator
- *                               through the host's native `ask` seam.
+ *   ctx.on('tools/pre-execute') runs the full core evaluation — floor, catastrophe,
+ *                               ledger, script reading — and, when a reviewer model is
+ *                               configured (`provider` and `model` in the plugin
+ *                               config), judges the call against the user's request.
+ *                               Without a configured model, or when the reviewer is
+ *                               unreachable, every consequential call goes to the
+ *                               operator through the host's `ask` seam.
  *
  * A waterfall listener that returns without `next()` denies; that is the fail-closed
  * direction, and here it is deliberate. Telemetry is local and carries no content.
  */
 
 import { loadCore } from "./core.js";
+import { buildDshCaller } from "./model.js";
+import { reviewExecution, toPreToolDecision } from "./gate.js";
 
 const core = await loadCore();
 const { STEP, Telemetry } = core.telemetry;
@@ -29,12 +35,13 @@ const { ObservationStore } = core.observation;
 const { StateFile } = core.state;
 const { detectCatastrophe } = core.floor;
 const { buildFileLayer } = core.files;
+const { buildDedupe } = core.dedupe;
 const { readPluginDirectory } = core.settings;
 const { VERSION } = core.version;
 
 export const name = "notnativereviewer";
 
-/** The shell tools whose `command` argument the catastrophe check reads. */
+/** The shell tools whose `command` argument the fallback catastrophe check reads. */
 const SHELL_TOOLS = new Set(["bash", "pwsh"]);
 
 /** The telemetry file name, next to the core modules. */
@@ -119,31 +126,15 @@ function textOf(content) {
 }
 
 /**
- * The command text of a shell call, or an empty string for every other tool.
+ * The floor-first fallback decision: the deterministic catastrophe deny, then the
+ * operator. Used while no reviewer model is configured.
  *
- * @param {{name: string, arguments: unknown}} exec
- * @returns {string}
+ * @param {object} exec a DSH ToolExecution
+ * @returns {{kind: string, reason?: string}}
  */
-export function shellCommandOf(exec) {
-  if (!exec || !SHELL_TOOLS.has(exec.name)) return "";
-  const args = exec.arguments;
-  if (!args || typeof args !== "object") return "";
-  const command = /** @type {{command?: unknown}} */ (args).command;
-  return typeof command === "string" ? command : "";
-}
-
-/**
- * The DSH pre-execute decision for one call, without the host.
- *
- * The catastrophe deny is deterministic: no model is asked, and no operator either.
- * Everything else goes to the operator through the host's `ask` seam — the honest
- * intermediate state of a floor-first build, and fail-closed by construction.
- *
- * @param {{name: string, arguments: unknown}} exec
- * @returns {{kind: "deny", reason: string} | {kind: "ask", reason: string}}
- */
-export function decidePreExecute(exec) {
-  const command = shellCommandOf(exec);
+function fallbackDecision(exec) {
+  const args = exec && exec.arguments && typeof exec.arguments === "object" ? exec.arguments : {};
+  const command = SHELL_TOOLS.has(exec && exec.name) && typeof args.command === "string" ? args.command : "";
   if (command !== "") {
     const catastrophe = detectCatastrophe(command);
     if (catastrophe) {
@@ -157,16 +148,37 @@ export function decidePreExecute(exec) {
   return {
     kind: "ask",
     reason:
-      "NotNativeReviewer (floor-first): the reviewer agent is not wired in this build, "
-      + "so the operator decides this call.",
+      "NotNativeReviewer: no reviewer model is configured, so the operator decides this call.",
   };
+}
+
+/**
+ * The pre-execute decision for one call, reviewer wired or not.
+ *
+ * @param {object} exec a DSH ToolExecution
+ * @param {{telemetry: object, stores: object, options: object, seen: object, fileLayer: object, hasReviewer: boolean}} deps
+ * @returns {Promise<{kind: string, reason?: string}>}
+ */
+async function decide(exec, deps) {
+  if (!deps.hasReviewer) return fallbackDecision(exec);
+  try {
+    return await reviewExecution(exec, deps);
+  } catch (error) {
+    deps.telemetry.record(STEP.UNGOVERNED, {
+      ok: false,
+      data: { gate: "review_failed", errorName: error && error.name },
+    });
+    // A review that cannot run denies: the operator is asked, never the model trusted
+    // with silence. The message names the failure, so the agent can see why.
+    return { kind: "ask", reason: "NotNativeReviewer: the reviewer did not answer, so the operator decides this call." };
+  }
 }
 
 /**
  * Install the listeners.
  *
  * @param {object} ctx the host context
- * @param {object} [config] the plugin config; reserved for the reviewer wiring
+ * @param {{provider?: string, model?: string, deadlineMs?: number}} [config]
  */
 export function apply(ctx, config = {}) {
   const telemetry = new Telemetry({ write: telemetrySink() });
@@ -178,12 +190,21 @@ export function apply(ctx, config = {}) {
     writer: stateWriter(),
     onFailure: (reason) => telemetry.record(STEP.STATE_RESTORED, { ok: false, data: { reason: `write:${reason}` } }),
   });
+  const caller = buildDshCaller(ctx, config);
+  const deps = {
+    telemetry,
+    stores,
+    seen: buildDedupe(),
+    fileLayer: buildFileLayer(),
+    options: { caller, deadlineMs: config.deadlineMs },
+    hasReviewer: Boolean(caller),
+  };
 
   telemetry.record(STEP.SETUP, {
     data: {
       version: VERSION,
       host: "dsh",
-      milestone: "floor-first",
+      hasReviewer: deps.hasReviewer,
       hasSessionEvent: Boolean(ctx && typeof ctx.on === "function"),
     },
   });
@@ -194,11 +215,10 @@ export function apply(ctx, config = {}) {
     data: { reason: restored.reason, sessions: restored.sessions, reads: restored.reads },
   });
 
-  // The user's own words are authority. DSH stamps every user-role message with its
-  // producer's source kind, so an injected context (a notice, a skill, a cron note)
-  // arrives with a kind that is not 'user' and is refused here — the authority
-  // question answered by the producer, not by a role flag.
   if (ctx && typeof ctx.on === "function") {
+    // The user's own words are authority. DSH stamps every user-role message with its
+    // producer's source kind, so an injected context arrives with a kind that is not
+    // 'user' and is refused here — authority answered by the producer, not a role flag.
     ctx.on("session/event", (session, event) => {
       if (!event || event.type !== "user/message") return;
       const message = event.data;
@@ -220,19 +240,16 @@ export function apply(ctx, config = {}) {
 
     ctx.on("tools/pre-execute", async (exec, next) => {
       telemetry.record(STEP.EVALUATE_START, { data: { action: String(exec && exec.name || "") } });
-      const decision = decidePreExecute(exec);
-      const effect = decision.kind === "deny" ? "deny" : "ask";
-      telemetry.record(STEP.DECISION_APPLIED, {
-        data: { action: String(exec && exec.name || ""), effect, reason: decision.kind },
-      });
-      telemetry.record(STEP.EVALUATE_END, { data: { effect } });
-      if (decision.kind === "deny") {
-        return { kind: "deny", reason: decision.reason };
+      const decision = await decide(exec, deps);
+      telemetry.record(STEP.EVALUATE_END, { data: { effect: decision.kind } });
+      if (decision.kind === "deny") return { kind: "deny", reason: decision.reason };
+      if (decision.kind === "ask") {
+        // `ask` reaches the host's approval seam; with no seam mounted DSH itself
+        // degrades it to a deny, so the fail-closed property holds either way.
+        void next;
+        return { kind: "ask", reason: decision.reason };
       }
-      // `ask` reaches the host's approval seam; with no seam mounted DSH itself
-      // degrades it to a deny, so the fail-closed property holds either way.
-      void next;
-      return { kind: "ask", reason: decision.reason };
+      return next();
     });
   } else {
     telemetry.record(STEP.UNGOVERNED, {

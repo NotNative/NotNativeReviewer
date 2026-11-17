@@ -102,7 +102,7 @@ const SAFE_SUB_ACTIONS = Object.freeze({
  * The grammar that decides whether it is a read lives in `read-grammar.js`, which can only
  * open a read: a command outside it stays consequential.
  */
-const SHELL_TOOLS = Object.freeze(new Set(["shell", "bash"]));
+const SHELL_TOOLS = Object.freeze(new Set(["shell", "bash", "pwsh"]));
 
 /** The command text of a shell call, or an empty string. */
 function readCommand(call) {

@@ -32,7 +32,9 @@
     installer proceeds directly when one adapter exists, and asks when several do.
 
 .PARAMETER DshProfile
-    The DSH profile to attach to (default web; `dsh web` runs the web profile).
+    The DSH profile(s) to attach to: one name, or a comma list. Default: every
+    profile that already exists in the user's DSH home (the Desktop app's, the
+    CLI's, headless, custom); a machine with no profiles yet falls back to web.
 
 .EXAMPLE
     ./install.ps1
@@ -50,7 +52,7 @@
 param(
     [string]$Target,
     [string]$Harness,
-    [string]$DshProfile = 'web'
+    [string]$DshProfile = ''
 )
 
 Set-StrictMode -Version Latest
@@ -314,10 +316,16 @@ function Attach-Dsh([string]$PackageDir, [string]$ProfileName) {
             if ($raw -match '"bundles"') {
                 $manifest = $raw | ConvertFrom-Json
                 if ($manifest.dsh -and $manifest.dsh.profile) {
-                    $current = if ($manifest.dsh.profile.bundles -is [array]) { @($manifest.dsh.profile.bundles) }
-                               elseif ($null -ne $manifest.dsh.profile.bundles) { @($manifest.dsh.profile.bundles) }
-                               else { @() }
-                    $kept = @($current | Where-Object { $_ -ne $PluginName })
+                    # An empty array as an if-branch value collapses to $null under
+                    # StrictMode; build with += so an empty bundle list stays a list.
+                    $current = @()
+                    if ($manifest.dsh.profile.bundles -is [array]) {
+                        foreach ($bundle in $manifest.dsh.profile.bundles) { $current += [string]$bundle }
+                    } elseif ($null -ne $manifest.dsh.profile.bundles) {
+                        $current += [string]$manifest.dsh.profile.bundles
+                    }
+                    $kept = @()
+                    foreach ($bundle in $current) { if ($bundle -ne $PluginName) { $kept += $bundle } }
                     if ($kept.Count -ne $current.Count) {
                         $manifest.dsh.profile.bundles = $kept
                         $json = $manifest | ConvertTo-Json -Depth 10
@@ -437,18 +445,45 @@ function Install-DshHost {
     }
     Write-Host "step 3/5  staged $($sourceFiles.Count) file(s) into $packageDir"
 
-    Attach-Dsh $packageDir $DshProfile
+    # The profiles to attach: every profile that exists in the user's DSH home, so
+    # a Desktop-only machine gets the desktop profile, a CLI machine gets web, and
+    # a machine with both gets both. -DshProfile pins one or a comma list, and a
+    # machine with no profiles yet falls back to web, which the harness creates.
+    $profiles = @()
+    if ($DshProfile) {
+        foreach ($name in ($DshProfile -split ',')) {
+            $trimmedName = $name.Trim()
+            if ($trimmedName -ne "") { $profiles += $trimmedName }
+        }
+    } else {
+        $dshHome = $env:DSH_HOME
+        if ([string]::IsNullOrWhiteSpace($dshHome)) {
+            $dshHome = Join-Path [Environment]::GetFolderPath('UserProfile') '.dsh'
+        }
+        $profilesDir = Join-Path $dshHome 'profiles'
+        if (Test-Path -LiteralPath $profilesDir -PathType Container) {
+            foreach ($dir in (Get-ChildItem -LiteralPath $profilesDir -Directory)) {
+                if (Test-Path -LiteralPath (Join-Path $dir.FullName 'package.json') -PathType Leaf) {
+                    $profiles += $dir.Name
+                }
+            }
+        }
+        if ($profiles.Count -eq 0) { $profiles = @('web') }
+    }
+    Write-Host "step 4/5  attaching to profile(s): $($profiles -join ', ')"
+    foreach ($profileName in $profiles) {
+        Attach-Dsh $packageDir $profileName
+    }
 
     $version = Read-ManifestField (Join-Path $packageDir 'package.json') 'version'
     Write-Host "step 5/5  done ($($sourceFiles.Count) file(s) staged)"
     Write-Host ""
     Write-Host "installed version : $version"
     Write-Host "package directory : $packageDir"
-    Write-Host "dsh profile       : $DshProfile"
+    Write-Host "dsh profiles      : $($profiles -join ', ')"
     Write-Host ""
-    Write-Host "Next step: restart the harness (dsh web). The profile loads the bundle at"
-    Write-Host "start, so this attach is active after the next start. To name the reviewer's"
-    Write-Host "model, edit cordis.patch.yml in the package directory."
+    Write-Host "Next step: restart the harness. Each profile loads the attachment at"
+    Write-Host "start, so this attach is active after the next start."
     exit 0
 }
 

@@ -297,7 +297,14 @@ export async function callReviewer(ctx, request, options = {}) {
     return { ok: true, text, ms };
   } catch (error) {
     const ms = Date.now() - started;
-    onStep("reviewer.error", { ms, errorName: error && error.name, message: String(error && error.message || "").slice(0, 96) });
+    onStep("reviewer.error", {
+      ms,
+      errorName: error && error.name,
+      message: String(error && error.message || "").slice(0, 48),
+      // The sanitizer digests anything past 48 characters; a long cause arrives in
+      // two fields, so an operator reads the whole sentence without a re-run.
+      message2: String(error && error.message || "").slice(48, 96),
+    });
     return { ok: false, reason: "call_failed", ms };
   } finally {
     if (timer) clearTimeout(timer);

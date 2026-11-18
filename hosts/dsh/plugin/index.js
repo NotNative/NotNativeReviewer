@@ -45,6 +45,11 @@ const { VERSION } = core.version;
 
 export const name = "notnativereviewer";
 
+// The service the reviewer calls through. Cordis refuses an undeclared service
+// access with "cannot get property without inject" — the dependency must be named
+// here so the host wires it into this plugin's context (docs/user/develop/basic).
+export const inject = ["llm"];
+
 /** The shell tools whose `command` argument the fallback catastrophe check reads. */
 const SHELL_TOOLS = new Set(["bash", "pwsh"]);
 

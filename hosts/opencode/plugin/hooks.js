@@ -1,19 +1,18 @@
 /**
  * Hooks — registration for each host hook point.
  *
- * Each function returns true when the host provided the hook and the gate registered on
- * it, and false when it did not — a visible degradation that the gate records, and the
- * host surface shows as partially ungoverned. The core arrives through `core.js`.
+ * Each function returns true when the host provided the hook and the gate registered
+ * on it, and false when it did not — a visible degradation that the gate records, and
+ * the host surface shows as partially ungoverned. The core arrives through `core.js`.
  */
 import { loadCore } from "./core.js";
-
 const core = await loadCore();
 const { digest, STEP } = core.telemetry;
 const { runEvaluation } = core.evaluate;
 const { recordWriteDigest } = core.ledger;
 const { readParentID } = core.parentLink;
 const { TRUST } = core.package;
-const { recordQuestionReply, recordRenderAnswer } = core.questions;
+const { recordQuestionReply, recordRenderAnswer, recordQuestionToolResult, recordAnswerFromTool } = core.questions;
 
 /** How many sessions' models to remember. Bounded, because sessions may never end. */
 const MAX_REMEMBERED_MODELS = 256;
@@ -395,10 +394,11 @@ export function registerToolAfter(ctx, deps) {
     // A call that changed a file just left known content on disk. Recording it here is
     // what lets the agent edit the same file again without reading it first (§6).
     recordChangedFile(deps, event, tool, targetPaths);
-    // A render page that waited for an answer carries the user's choice. Append it to the
-    // package, so the reviewer can treat it as authority for the calls that follow.
+    // A tool result can carry the user's own answer — a render page that waited, or
+    // the question tool's result on hosts that send no replied event. Either way it
+    // joins the package as authority for the calls that follow.
     try {
-      recordRenderAnswer(deps, event);
+      recordAnswerFromTool(deps, event);
     } catch {
       // A malformed tool result must not break the tool result hook.
     }

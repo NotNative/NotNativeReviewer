@@ -1,14 +1,18 @@
 /**
  * Question answers — append the user's answer to the reviewer package.
  *
- * Two paths reach the gate:
- *   - OpenCode's question tool emits `question.replied` and `question.v2.replied`.
- *   - OpenChamber's `render.page` with `awaitAnswer` returns the answer as a tool result,
- *     because OpenCode never sees that wait.
+ * Three paths reach the gate:
+ *   - OpenCode's question tool emits `question.replied` and `question.v2.replied`
+ *     on hosts that send those events;
+ *   - the question tool's own result, when the host does not send a replied event —
+ *     observed live on OpenChamber, 2026-11-18: the card's answer arrives only as
+ *     the tool result, so the result is read the same way a page answer is;
+ *   - OpenChamber's `render.page` with `awaitAnswer` returns the answer as a tool
+ *     result, because OpenCode never sees that wait.
  *
- * Both carry the user's own words, so both append as `user_authored` in conversation
- * order. A render answer is accepted only from the host's `openchamber_render` tool, and
- * only when the call says it waited.
+ * All three carry the user's own words, so all append as `user_authored` in
+ * conversation order. A render answer is accepted only from the host's
+ * `openchamber_render` tool, and only when the call says it waited.
  *
  * Imports only sibling modules.
  */
@@ -104,6 +108,119 @@ function readValue(value) {
     return JSON.parse(value);
   } catch {
     return null;
+  }
+}
+
+/**
+ * Append the user's answer carried by a tool result, whichever path the host uses:
+ * a render page that waited, or the question tool's result on hosts that send no
+ * replied event (observed live on OpenChamber, 2026-11-18). One entry point for the
+ * tool-result hook; a malformed result must not break the hook, so each path is
+ * contained.
+ *
+ * @param {{ telemetry: object, stores: object }} deps
+ * @param {object} event the `tool.execute.after` event
+ * @returns {boolean} true when an answer was appended
+ */
+export function recordAnswerFromTool(deps, event) {
+  try {
+    if (recordRenderAnswer(deps, event)) return true;
+  } catch {
+    // A malformed render result must not break the hook.
+  }
+  try {
+    return recordQuestionToolResult(deps, event);
+  } catch {
+    // A malformed question result must not break the hook.
+    return false;
+  }
+}
+
+/**
+ * Append an answer from the question tool's own result.
+ *
+ * Observed live on OpenChamber, 2026-11-18: the question card's answer arrives only
+ * as the tool result — no `question.replied` event is sent, so an answered card left
+ * no authority behind and the gate re-asked in chat. The tool's name and the result's
+ * "Answered:" line are the observed shape; the structured answer array is honoured
+ * when the host supplies one, because a host update may add it back.
+ *
+ * @param {{ telemetry: object, stores: object }} deps
+ * @param {object} event the `tool.execute.after` event
+ * @returns {boolean} true when an answer was appended
+ */
+export function recordQuestionToolResult(deps, event) {
+  if (!event || String(event.tool || "").toLowerCase() !== "question") return false;
+  if (!isQuestionCall(readValue(event.input))) return false;
+  const answers = readQuestionResultText(readValue(event.result));
+  if (answers === "") return false;
+  const callID = event.callID || event.id;
+  const id = callID ? `question:${callID}` : `question:${digest(answers)}`;
+  const text = `The user answered a question: ${answers}`;
+  return appendAnswer(deps, { sessionID: event.sessionID, id, text, source: "question" });
+}
+
+/** Whether the call looks like a question call: a `questions` array in the input. */
+function isQuestionCall(input) {
+  return Boolean(input && !Array.isArray(input) && Array.isArray(input.questions) && input.questions.length > 0);
+}
+
+/**
+ * Read the answer from a question tool result.
+ *
+ * The observed shape is a line like "Answered: <header> <label>"; every Answered
+ * line is taken, in order, so a multi-question card keeps each answer. A structured
+ * result with an `answers` array is read first, because it is lossless.
+ */
+function readQuestionResultText(result) {
+  const structured = readStructuredAnswers(result, 0);
+  if (structured !== "") return structured;
+  const text = typeof result === "string" ? result : stringify(result);
+  const lines = [];
+  const pattern = /Answered:\s*(.+)/g;
+  let match;
+  while ((match = pattern.exec(text)) !== null) {
+    const answer = match[1].trim();
+    if (answer !== "") lines.push(answer);
+  }
+  return lines.join("; ");
+}
+
+/** Find an answers array in a structured result, bounded like the render search. */
+function readStructuredAnswers(value, depth) {
+  if (!value || typeof value !== "object" || depth > 3) return "";
+  if (Array.isArray(value)) {
+    for (const item of value) {
+      const found = readStructuredAnswers(item, depth + 1);
+      if (found !== "") return found;
+    }
+    return "";
+  }
+  if (Array.isArray(value.answers)) {
+    const parts = [];
+    for (const item of value.answers) {
+      const label = readLabels(item && item.answer !== undefined ? item.answer : item);
+      if (label !== "") parts.push(label);
+    }
+    return parts.join("; ");
+  }
+  for (const key of ["data", "output", "content", "result", "text"]) {
+    if (value[key] !== undefined) {
+      const found = readStructuredAnswers(readValue(value[key]), depth + 1);
+      if (found !== "") return found;
+    }
+  }
+  return "";
+}
+
+/** JSON text of a value, or the empty string for nothing. */
+function stringify(value) {
+  if (value === null || value === undefined) return "";
+  if (typeof value === "string") return value;
+  try {
+    return JSON.stringify(value);
+  } catch {
+    return "";
   }
 }
 

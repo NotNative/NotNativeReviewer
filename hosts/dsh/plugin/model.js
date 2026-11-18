@@ -26,15 +26,12 @@
 export function buildDshCaller(ctx) {
   return async (target, args) => {
     const llm = resolveLlm(ctx);
-    let prepared;
-    try {
-      prepared = await llm.prepareCall(target.provider, target.model);
-    } catch (error) {
-      throw new Error(`NotNativeReviewer: llm prepareCall failed: ${error && error.message}`);
-    }
+    // One call: the runtime resolves the adapter and dispatches. prepareCall exists
+    // too, but takes a config object and binds a prepared call whose options must
+    // match it exactly; the direct stream asks for less and can match nothing wrong.
     let stream;
     try {
-      stream = prepared.stream({
+      stream = llm.stream({
         provider: target.provider,
         model: target.model,
         messages: [{ role: "user", content: [{ type: "text", text: String(args.prompt || "") }] }],

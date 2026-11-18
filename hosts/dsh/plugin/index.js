@@ -195,7 +195,8 @@ async function decide(exec, deps) {
     caller: (args) => deps.callerFactory(target, args),
   };
   try {
-    return await reviewExecution(exec, { ...deps, options });
+    const decision = await reviewExecution(exec, { ...deps, options });
+    return { ...decision, target: `${target.provider}/${target.model}` };
   } catch (error) {
     deps.telemetry.record(STEP.UNGOVERNED, {
       ok: false,
@@ -304,7 +305,7 @@ export function apply(ctx, config = {}) {
     ctx.on("tools/pre-execute", async (exec, next) => {
       telemetry.record(STEP.EVALUATE_START, { data: { action: String(exec && exec.name || "") } });
       const decision = await decide(exec, deps);
-      telemetry.record(STEP.EVALUATE_END, { data: { effect: decision.kind } });
+      telemetry.record(STEP.EVALUATE_END, { data: { effect: decision.kind, reviewerModel: decision.target || "none" } });
       if (decision.kind === "deny") return { kind: "deny", reason: decision.reason };
       if (decision.kind === "ask") {
         // `ask` reaches the host's approval seam; with no seam mounted DSH itself

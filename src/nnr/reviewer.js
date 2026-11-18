@@ -297,7 +297,7 @@ export async function callReviewer(ctx, request, options = {}) {
     return { ok: true, text, ms };
   } catch (error) {
     const ms = Date.now() - started;
-    onStep("reviewer.error", { ms, errorName: error && error.name });
+    onStep("reviewer.error", { ms, errorName: error && error.name, message: String(error && error.message || "").slice(0, 96) });
     return { ok: false, reason: "call_failed", ms };
   } finally {
     if (timer) clearTimeout(timer);

@@ -67,7 +67,7 @@ The step list is closed. A step outside the list is a defect and is recorded as
 | `floor.classified` | The call was classified |
 | `projection.built` | The reviewer request was assembled |
 | `reviewer.called` | A reviewer call began |
-| `reviewer.answered` | A reviewer call returned, timed out, or failed |
+| `reviewer.answered` | A reviewer call returned, timed out, or failed. A failure carries its cause in `message` and `message2` — the sanitiser caps a string at 48 characters, so a long cause arrives in two readable fields. On a host whose reviewer model is resolved per conversation, `evaluate.end` names the resolved `reviewerModel`, which distinguishes a live selection from the configured fallback. |
 | `decision.validated` | A decision was parsed and validated |
 | `decision.repaired` | The first attempt failed and a second was made |
 | `decision.applied` | An effect was written to the host |

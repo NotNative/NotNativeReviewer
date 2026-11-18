@@ -104,7 +104,9 @@ does not need.
 
 ## Requirements
 
-- OpenCode 2.x with the plugin API at version 2.3.0 or later.
+- OpenCode 2.x with the plugin API at version 2.3.0 or later. A second adapter
+  attaches NotNativeReviewer to the DeepSeek Harness as well; see
+  [docs/install.md](docs/install.md) §3.5.
 - A model that the conversation uses. One model is enough. The reviewer uses the model the
   conversation already has, so a local inference provider such as Ollama or LM Studio works.
 - The operator assumes a minimum context window of 32,768 tokens.
@@ -168,11 +170,18 @@ notnativereviewer/
 
 ## Status
 
-Tested against a mock host and run on a live OpenCode instance. On that instance the plugin
-loaded from the default global config directory, all six hooks registered, the reviewer
-answered with the session's own model, and decisions applied to tool calls. The delegation
-hierarchy, the persistence across a reload, and the authority of a question or form answer
-were each verified on the live instance.
+Tested against a mock host and run on two live hosts:
+
+- **OpenCode.** The plugin loaded from the default global config directory, all six
+  hooks registered, the reviewer answered with the session's own model, and decisions
+  applied to tool calls. The delegation hierarchy, the persistence across a reload,
+  and the authority of a question or form answer were each verified on the live
+  instance.
+- **The DeepSeek Harness.** The Desktop application runs the gate inside its own
+  process: user messages arrive as authority, reads and searches pass the floor
+  without a model, and a real file write was reviewed over the conversation's own
+  model and approved with cited anchors. The attachment covers every profile the
+  harness home holds (desktop, web, headless).
 
 These behaviours remain unverified:
 
@@ -181,6 +190,11 @@ These behaviours remain unverified:
 - whether the permission hook fires for a call that a rule already allows;
 - whether the hook supplies resolved absolute paths;
 - whether the plugin's `setup` writes a line that the operator can see.
+
+On the DeepSeek Harness, three probes remain from ordinary use: whether a tool
+execution's agent identity matches the session identity the events carry (the live
+model lookup depends on it), the delegation probe, and egress classification for the
+harness's fetch-family tool names.
 
 Treat the four items above as unproven until a live instance confirms them, not as absent.
 

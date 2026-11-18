@@ -24,7 +24,7 @@ Run the script for your platform from the repository root.
 ### 1.1 What the script does
 
 1. It reads the plugin name from `hosts/opencode/plugin/package.json` in this repository.
-2. It resolves the config directory the same way the installer does (Â§2), and appends
+2. It resolves the config directory the same way the installer does (§2), and appends
    `plugins/<name>/`.
 3. It checks that the directory holds a `package.json` with that same name.
 4. It moves `notnativereviewer-telemetry.jsonl`, when the directory holds one, to
@@ -35,6 +35,19 @@ Run the script for your platform from the repository root.
 The ownership check is what makes the script safe. The script removes a directory only
 when that directory says, in its own `package.json`, that it is NotNativeReviewer. A directory
 with another name, or with no manifest, is left alone and the script stops.
+
+### 1.2 The DeepSeek Harness
+
+The Windows uninstaller currently detaches OpenCode only. To remove the DeepSeek
+Harness attachment, remove two things from each profile under `~/.dsh/profiles/`:
+
+1. the `notnativereviewer` insert row in the profile's `cordis.patch.yml`;
+2. the `notnativereviewer` link under the profile's `node_modules`.
+
+The staged package in the central install home
+(`%LOCALAPPDATA%\notnativereviewer\`) can stay: it holds the audit log and the state,
+and a later install adopts them. Automating this removal is the uninstaller's next
+step.
 
 ### 1.2 What the script does not do
 

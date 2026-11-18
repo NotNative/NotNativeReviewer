@@ -31,30 +31,37 @@ core (`src/nnr/`); this directory holds only the DSH wiring.
   user speaks again), and the audit log is written beside the core with no content in
   it, as everywhere else.
 
-## Attach (development)
+## Attach
 
-From the DeepSeek Harness checkout, with the NotNativeReviewer repository beside it,
-load the adapter through a patch file:
+**The installer attaches.** Run `./install.ps1 -Harness dsh` from the NotNativeReviewer
+repository (or omit the pin and choose from the detected harnesses). The installer
+stages the package into the central home (`%LOCALAPPDATA%\notnativereviewer\dsh\
+notnativereviewer` on Windows), then attaches it to **every profile that exists** in
+the user's `DSH_HOME` — the Desktop app's, the CLI's `web`, headless, custom — by
+writing one row into each profile's own `cordis.patch.yml` and linking the package
+through the profile's `node_modules`:
 
 ```yaml
-# cordis-nnr.yml
-insert:
-  - id: notnativereviewer
-    name: /absolute/path/to/notnativereviewer/hosts/dsh/plugin/index.js
-    config:
-      provider: deepseek
-      model: deepseek-chat
+- insert:
+    - id: notnativereviewer
+      name: ./node_modules/notnativereviewer/index.js
+      config:
+        provider: "sparkcluster"
+        model: "GoldenGirls/spark"
 ```
 
-```sh
-pnpm dsh web --patch ./cordis-nnr.yml
-```
+The shape is load-bearing and field-verified: the patch layer's plain rows are
+id-targeted overrides of entries the base bundle already defines, so a **new** plugin
+must be an `insert` row — a plain row is silently dropped. The relative module name
+resolves because the loader anchors its import base at the profile directory.
+`-DshProfile <name>` pins one profile or a comma list.
 
 `provider` and `model` are only the reviewer's fallback for a conversation that has
 shown no model selection yet — the live value always comes from the conversation's
 own `model/selection` and `assistant/message` events. The installer pre-fills them
 from the profile's `agent-default-model` row. `deadlineMs` is optional (default
-120000).
+120000). **Uninstalling** the plugin means removing that row and the junction —
+the app's own plugin-page Uninstall button does not own this attachment.
 
 Bundling (the npm `dsh` bundle field) would inline the core import; until the core is
 marked external, attach unbundled through the patch path.
@@ -71,9 +78,19 @@ approve delegates to the host, deny-with-guidance denies with the reviewer's mes
 a malformed answer fails closed, and a call with no user authority never reaches the
 reviewer.
 
+## Verified live
+
+The adapter runs inside the Desktop application (which boots its harness inside the
+Electron process, not a separate `node`): the plugin loads and activates, user
+messages arrive as authority, reads and searches pass the floor without a model, and
+a real file write was reviewed over the conversation's own model and approved with
+cited anchors (`consolidated_file_is_the_requested_deliverable`). The audit trail
+names the resolved reviewer model per call, so a live lookup is distinguishable from
+the config fallback.
+
 ## Next
 
-Live verification on a running `dsh` (step 3c): confirm the llm runtime is reached
-exactly as documented, confirm `agent.id` is the same identity the session events
-carry, and probe delegation — whether a DSH subagent's session can name its parent —
-before any reliance on a hierarchy.
+Non-blocking probes from ordinary use: whether `agent.id` is the same identity the
+session events carry (the live model lookup depends on it), the delegation probe —
+whether a DSH subagent's session can name its parent — and egress classification for
+DSH's fetch-family tool names.

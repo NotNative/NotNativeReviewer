@@ -46,7 +46,7 @@ A plugin module imports only:
 - JavaScript built-ins.
 
 No module imports `@opencode/plugin`. The plugin loads from a directory where no
-`node_modules` exists ([install.md](install.md) Â§3). Types come from the host at run time,
+`node_modules` exists ([install.md](install.md) §3). Types come from the host at run time,
 not from an import.
 
 ## 4. Telemetry carries no content
@@ -63,7 +63,7 @@ must not turn an `allow` into a `deny`, and must not turn a `deny` into an `allo
 
 ## 6. The check script
 
-The scripts named in this section and in Â§7 live in the local `tools/` folder, which is not
+The scripts named in this section and in §7 live in the local `tools/` folder, which is not
 tracked in the repository. A published clone does not include them.
 
 `tools/check-quality.mjs` reads every `.js` file in `src/` and `hosts/` and fails when:

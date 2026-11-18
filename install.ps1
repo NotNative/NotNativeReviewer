@@ -381,8 +381,18 @@ function Attach-Dsh([string]$PackageDir, [string]$ProfileName) {
             $model = $Matches[2].Trim()
         }
         $row = $insertRow -f $provider, $model
-        $patch = $patch.TrimEnd() + "`r`n`r`n# NotNativeReviewer (added by the NotNativeReviewer installer). The reviewer model" + `
-            "`r`n# follows the profile's own default; edit it here to judge with a different model." + "`r`n" + $row
+        # An untouched profile's patch layer is the template `[]` — a scalar, not an
+        # array to append to. Appending after it makes the file two YAML documents,
+        # which the loader refuses. An empty or empty-template layer is therefore
+        # REPLACED by the row; a layer with real rows is appended to.
+        $trimmed = $patch.Trim()
+        if ($trimmed -eq "" -or $trimmed -eq "[]") {
+            $patch = "# NotNativeReviewer (added by the NotNativeReviewer installer). The reviewer model" + "`r`n" +
+                "# follows the profile's own default; edit it here to judge with a different model." + "`r`n" + $row
+        } else {
+            $patch = $patch.TrimEnd() + "`r`n`r`n# NotNativeReviewer (added by the NotNativeReviewer installer). The reviewer model" + `
+                "`r`n# follows the profile's own default; edit it here to judge with a different model." + "`r`n" + $row
+        }
         [System.IO.File]::WriteAllText($patchPath, $patch)
         if ($model -ne "") {
             Write-Host "          reviewer model follows the profile default: $provider / $model"

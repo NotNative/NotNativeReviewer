@@ -458,7 +458,7 @@ function Install-DshHost {
     } else {
         $dshHome = $env:DSH_HOME
         if ([string]::IsNullOrWhiteSpace($dshHome)) {
-            $dshHome = Join-Path [Environment]::GetFolderPath('UserProfile') '.dsh'
+            $dshHome = Join-Path ([Environment]::GetFolderPath('UserProfile')) '.dsh'
         }
         $profilesDir = Join-Path $dshHome 'profiles'
         if (Test-Path -LiteralPath $profilesDir -PathType Container) {
